@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/theme",
     "crates/proto",
+    "crates/crypto",
     "crates/preview",
     "crates/doc",
     "crates/sync",
@@ -22,6 +23,7 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+zeron-crypto = { path = "crates/crypto" }
 zeron-proto = { path = "crates/proto" }
 zeron-preview = { path = "crates/preview" }
 zeron-doc = { path = "crates/doc" }

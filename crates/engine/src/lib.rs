@@ -37,6 +37,10 @@ pub mod uploads;
 pub mod workspace_files;
 pub mod workspace_host;
 
+mod authenticated_harness;
+pub mod shared_credentials;
+pub mod vault;
+
 pub use agent_accounts::{AgentAccounts, AgentAccountsConfig};
 pub use auth::{Auth, AuthConfig, AuthState, AuthUser, OrgMembership};
 pub use change_requests::{ChangeRequestCacheKey, CheckoutChangeRequests};
@@ -130,6 +134,7 @@ pub struct EngineCore {
     pub spaces_sync: SpacesSync,
     pub uploads: Uploads,
     pub agent_accounts: AgentAccounts,
+    pub shared_credentials: shared_credentials::SharedCredentials,
     pub device_id: String,
     /// Local→synced profile import (account-scoped runtimes only).
     pub local_import: Option<local_import::LocalImporter>,
@@ -212,6 +217,47 @@ impl EngineCore {
         let store = Arc::new(DocsStore::open(profile.store_root())?);
         let store_for_import = store.clone();
         let journal = Arc::new(RunJournal::open(profile.store_root().join("journals"))?);
+        let vault_client = edge
+            .as_ref()
+            .filter(|_| profile.scope() == WorkspaceScope::Synced)
+            .map(|edge| {
+                vault::client::VaultClient::new(
+                    reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(20))
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()
+                        .expect("vault HTTP client"),
+                    edge.clone(),
+                    profile.org_id(),
+                )
+            });
+        let protection = if vault_client.is_some() {
+            vault::platform_protection()
+        } else {
+            Box::new(vault::LockedProtection(
+                "Sign into Zeron to share credentials.".into(),
+            )) as Box<dyn vault::ProtectionKeyProvider>
+        };
+        let vault_store = vault::VaultStore::new(
+            profile.store_root(),
+            serde_json::to_string(&(profile.org_id(), profile.user_id()))
+                .expect("profile identity"),
+            protection,
+        );
+        let vault = vault::VaultService::open(
+            vault_store,
+            vault_client.clone(),
+            profile.org_id(),
+            profile.user_id(),
+        );
+        let shared_credentials = shared_credentials::SharedCredentials::new(vault, vault_client);
+        let agent_accounts = AgentAccounts::new(AgentAccountsConfig::detect(data_dir));
+        agent_accounts.set_shared(shared_credentials.clone());
+        let registry = Arc::new(registry.with_credentials(
+            shared_credentials.clone(),
+            profile.store_root().join("agent-profiles"),
+        ));
+
         let sessions = SessionsEngine::new(device_id.clone(), journal, registry.clone());
         let doc_host = DocHost::new(
             store.clone(),
@@ -281,7 +327,6 @@ impl EngineCore {
                 uploads.clone(),
             )
         });
-        let agent_accounts = AgentAccounts::new(AgentAccountsConfig::detect(data_dir));
         sessions.set_titles(TitleGenerator::new(
             workspace.clone(),
             registry.clone(),
@@ -308,6 +353,7 @@ impl EngineCore {
             spaces_sync,
             uploads,
             agent_accounts,
+            shared_credentials,
             device_id,
             local_import,
             workspace_scope: profile.scope(),
@@ -422,7 +468,11 @@ impl EngineCore {
                 }
             }
         });
-        zeron_rpc::HostRelay::spawn(config, self.rpc_service(), on_nudge)
+        zeron_rpc::HostRelay::spawn(
+            config,
+            Arc::new(crate::rpc::CredentialRelayGuard(self.rpc_service())),
+            on_nudge,
+        )
     }
 
     pub fn rpc_service(&self) -> Arc<EngineRpc> {
@@ -441,7 +491,8 @@ impl EngineCore {
             self.workspace_scope,
         )
         .with_auth(self.auth())
-        .with_previews(self.previews.clone());
+        .with_previews(self.previews.clone())
+        .with_vault(self.shared_credentials.vault().clone());
         if let Some(links) = self.links() {
             rpc = rpc.with_links(links);
         }

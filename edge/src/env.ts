@@ -1,4 +1,5 @@
 export interface Env {
+  VAULT_ROOMS: DurableObjectNamespace;
   SESSION_ROOMS: DurableObjectNamespace;
   DEVICE_ROOMS: DurableObjectNamespace;
   PREVIEW_ROOMS: DurableObjectNamespace;

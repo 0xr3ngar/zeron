@@ -37,6 +37,7 @@
   },
   "durable_objects": {
     "bindings": [
+      { "name": "VAULT_ROOMS", "class_name": "VaultRoom" },
       { "name": "SESSION_ROOMS", "class_name": "SessionRoom" },
       { "name": "DEVICE_ROOMS", "class_name": "DeviceRoom" },
       { "name": "PREVIEW_ROOMS", "class_name": "PreviewRoom" },
@@ -61,7 +62,8 @@
       "tag": "v3",
       "new_sqlite_classes": ["ChatRoom"]
     },
-    { "tag": "v4", "new_sqlite_classes": ["PreviewRoom"] }
+    { "tag": "v4", "new_sqlite_classes": ["PreviewRoom"] },
+    { "tag": "v5", "new_sqlite_classes": ["VaultRoom"] }
   ],
   "r2_buckets": [
     {

@@ -40,7 +40,6 @@ use crate::settings::appearance::AppearancePage;
 use crate::settings::archived::ArchivedPage;
 use crate::settings::devices::DevicesPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
-use crate::settings::harnesses::HarnessesPage;
 use crate::settings::notifications::{NotificationsEvent, NotificationsPage};
 use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
 use crate::settings::{
@@ -395,10 +394,9 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 8] = [
+    pub const ALL: [SettingsSection; 7] = [
         SettingsSection::Devices,
         SettingsSection::Harnesses,
-        SettingsSection::Agents,
         SettingsSection::Appearance,
         SettingsSection::Files,
         SettingsSection::Notifications,
@@ -412,7 +410,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Devices => "Devices",
             SettingsSection::Harnesses => "Agents",
-            SettingsSection::Agents => "Accounts",
+            SettingsSection::Agents => "Agents",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
             SettingsSection::Notifications => "Notifications",
@@ -1247,7 +1245,6 @@ pub struct Shell {
     notifications_page: Option<Entity<NotificationsPage>>,
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
-    harnesses_page: Option<Entity<HarnessesPage>>,
     shortcuts_sub: Option<Subscription>,
     notifications_sub: Option<Subscription>,
     files_settings_sub: Option<Subscription>,
@@ -1588,7 +1585,6 @@ impl Shell {
             notifications_page: None,
             shortcuts_page: None,
             accounts_page: None,
-            harnesses_page: None,
             shortcuts_sub: None,
             notifications_sub: None,
             files_settings_sub: None,
@@ -3174,8 +3170,11 @@ impl Shell {
     fn open_settings(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
         // Recreate per visit: the page's ListHarnesses load re-probes which
         // CLIs are installed, so installing one shows up on the next open.
-        if section == SettingsSection::Harnesses {
-            self.harnesses_page = None;
+        if matches!(
+            section,
+            SettingsSection::Harnesses | SettingsSection::Agents
+        ) {
+            self.accounts_page = None;
         }
         self.route = Route::Settings(section);
         self.nav.push(NavEntry::Settings(section));
@@ -3245,17 +3244,7 @@ impl Shell {
                     None => Empty.into_any_element(),
                 }
             }
-            SettingsSection::Harnesses => {
-                if self.harnesses_page.is_none() {
-                    let state = self.state.clone();
-                    self.harnesses_page = Some(cx.new(|cx| HarnessesPage::new(state, cx)));
-                }
-                match &self.harnesses_page {
-                    Some(page) => page.clone().into_any_element(),
-                    None => Empty.into_any_element(),
-                }
-            }
-            SettingsSection::Agents => {
+            SettingsSection::Harnesses | SettingsSection::Agents => {
                 if self.accounts_page.is_none() {
                     let state = self.state.clone();
                     self.accounts_page = Some(cx.new(|cx| AccountsPage::new(state, cx)));
@@ -10512,6 +10501,18 @@ mod exit_regressions {
 /// Native browser regression fixture hooks are excluded from shipped builds.
 #[cfg(feature = "browser-fixture")]
 impl Shell {
+    pub fn fixture_open_agents(&mut self, cx: &mut Context<Self>) {
+        self.open_settings(SettingsSection::Harnesses, cx);
+    }
+    pub fn fixture_expand_agent(
+        &mut self,
+        harness: zeron_proto::HarnessId,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(page) = &self.accounts_page {
+            page.update(cx, |page, cx| page.fixture_expand(harness, cx));
+        }
+    }
     pub fn fixture_open_browser(
         &mut self,
         url: Option<String>,

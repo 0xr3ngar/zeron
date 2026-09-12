@@ -268,6 +268,7 @@ impl ClaudeHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        crate::runtime_auth::apply(&mut cmd);
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(exe.display().to_string())
@@ -403,6 +404,9 @@ impl Harness for ClaudeHarness {
     /// model turn (verified live, 2.1.228: the control_response is the first
     /// stdout line, well before any API traffic). Cached on success.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
+        if crate::runtime_auth::is_active() {
+            return self.discover_commands().await;
+        }
         self.commands
             .get_or_try_init(|| self.discover_commands())
             .await
@@ -453,6 +457,7 @@ impl ClaudeHarness {
                 "",
             ]);
         }
+        crate::runtime_auth::apply(&mut cmd);
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(exe.display().to_string())

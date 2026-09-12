@@ -93,6 +93,7 @@ impl Catalog {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        crate::runtime_auth::apply(&mut cmd);
         let output = tokio::time::timeout(timeout, cmd.output())
             .await
             .map_err(|_| HarnessError::Protocol("Devin model discovery timed out".into()))??;

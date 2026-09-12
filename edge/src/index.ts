@@ -1,3 +1,4 @@
+export { VaultRoom } from "./vault-room";
 /**
  * Zeron-native edge Worker (design §2, ARCHITECTURE §6): JWT auth at the
  * edge, then forwarding into per-session, per-workspace, and per-device
@@ -160,6 +161,14 @@ export default {
 
     const auth = await authenticate(env, request);
     if (!auth) return json({ error: "unauthenticated" }, 401);
+
+    if (url.pathname.startsWith("/vault/")) {
+      const segments = url.pathname.slice(7).split("/").filter(Boolean);
+      const orgId = segments.shift();
+      if (!orgId || !ID_RE.test(orgId) || auth.orgId !== orgId) return json({ error: "forbidden" }, 403);
+      if (segments.length > 3 || !segments.every(s => /^[A-Za-z0-9]{1,64}$/.test(s))) return json({ error: "not found" }, 404);
+      return forward(env.VAULT_ROOMS, `vault1/${orgId}/${auth.userId}`, request, auth.userId, `/${segments.join("/")}`, url.search);
+    }
 
     const preview = previewRoute(request, env, auth);
     if (preview) return preview;

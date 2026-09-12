@@ -21,7 +21,12 @@ required-features = ["browser-fixture"]
 name = "browser-fixture"
 required-features = ["browser-fixture"]
 
+[[example]]
+name = "agents-fixture"
+required-features = ["browser-fixture"]
+
 [dependencies]
+zeroize = "1"
 url = "2"
 zeron-proto.workspace = true
 similar.workspace = true

@@ -1552,6 +1552,7 @@ pub struct ComposerInput {
     focus_handle: FocusHandle,
     content: String,
     pub(crate) read_only: bool,
+    secret: bool,
     placeholder: SharedString,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -1650,6 +1651,7 @@ impl ComposerInput {
             focus_handle: cx.focus_handle(),
             content: String::new(),
             read_only: false,
+            secret: false,
             placeholder: placeholder.into(),
             selected_range: 0..0,
             selection_reversed: false,
@@ -1709,6 +1711,14 @@ impl ComposerInput {
         self.configured_line_height = line_height;
         self.line_height = px(line_height);
         self.content_height = line_height;
+        self
+    }
+
+    /// ASCII credential field: masked display, no copy or undo history, and
+    /// no plaintext surrounding-text exposure to input methods.
+    pub fn with_secret(mut self) -> Self {
+        self.secret = true;
+        self.single_line = true;
         self
     }
 
@@ -1784,7 +1794,12 @@ impl ComposerInput {
     }
 
     fn refresh_projection(&mut self) {
-        self.projection = if self.mentions_enabled {
+        self.projection = if self.secret {
+            TextProjection {
+                display: "*".repeat(self.content.len()),
+                mentions: Vec::new(),
+            }
+        } else if self.mentions_enabled {
             TextProjection::new(&self.content)
         } else {
             TextProjection {
@@ -1929,7 +1944,15 @@ impl ComposerInput {
 
     pub fn set_text(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
         self.invalidate_mention_tooltip();
+        if self.secret {
+            use zeroize::Zeroize;
+            self.content.zeroize();
+        }
         self.content = text.into();
+        if self.secret {
+            self.content.retain(|c| c.is_ascii() && !c.is_control());
+            self.content.truncate(16_384);
+        }
         if self.single_line {
             self.content = self.content.replace(['\r', '\n'], " ");
         }
@@ -2090,6 +2113,9 @@ impl ComposerInput {
     /// Called with the range about to be replaced, BEFORE the content changes,
     /// so the pushed snapshot is the pre-edit state.
     fn record_edit(&mut self, range: &Range<usize>, new_text: &str) {
+        if self.secret {
+            return;
+        }
         let kind = if new_text.is_empty() {
             EditKind::Delete
         } else {
@@ -2468,6 +2494,9 @@ impl ComposerInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.secret {
+            return;
+        }
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
@@ -2480,6 +2509,10 @@ impl ComposerInput {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.secret {
+            self.replace_text_in_range(None, "", window, cx);
+            return;
+        }
         if self.read_only {
             return;
         }
@@ -3116,7 +3149,11 @@ impl EntityInputHandler for ComposerInput {
             .projection
             .normalize_range(self.range_from_utf16(&range_utf16));
         actual_range.replace(self.range_to_utf16(&range));
-        Some(self.content.get(range)?.to_string())
+        if self.secret {
+            Some("*".repeat(range.len()))
+        } else {
+            Some(self.content.get(range)?.to_string())
+        }
     }
 
     fn selected_text_range(
@@ -3152,6 +3189,13 @@ impl EntityInputHandler for ComposerInput {
         if self.read_only {
             return;
         }
+        if self.secret
+            && (!new_text.is_ascii()
+                || new_text.chars().any(char::is_control)
+                || self.content.len().saturating_add(new_text.len()) > 16_384)
+        {
+            return;
+        }
         let single_line_text;
         let new_text = if self.single_line {
             single_line_text = new_text.replace(['\r', '\n'], " ");
@@ -3169,7 +3213,7 @@ impl EntityInputHandler for ComposerInput {
         // An IME commit is the tail of a composition whose pre-composition
         // snapshot was already taken (`replace_and_mark_text_in_range`);
         // recording here would pin undo to the half-composed text instead.
-        if self.marked_range.is_none() {
+        if self.marked_range.is_none() && !self.secret {
             self.record_edit(&range, new_text);
         }
         self.content =
@@ -3194,6 +3238,13 @@ impl EntityInputHandler for ComposerInput {
         cx: &mut Context<Self>,
     ) {
         if self.read_only {
+            return;
+        }
+        if self.secret
+            && (!new_text.is_ascii()
+                || new_text.chars().any(char::is_control)
+                || self.content.len().saturating_add(new_text.len()) > 16_384)
+        {
             return;
         }
         let single_line_text;
@@ -7307,6 +7358,38 @@ mod tests {
     }
 
     #[gpui::test]
+    fn secret_inputs_never_expose_text_to_display_clipboard_or_ime(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let host = cx.add_window(|_, cx| ComposerInput::new("API key", cx).with_secret());
+        host.update(cx, |input, window, cx| {
+            input.set_text("sk-secret-canary", cx);
+            assert_eq!(input.projection.display, "*".repeat(16));
+            input.selected_range = 0..input.content.len();
+            cx.write_to_clipboard(ClipboardItem::new_string("existing clipboard".into()));
+            input.copy(&Copy, window, cx);
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().as_deref(),
+                Some("existing clipboard")
+            );
+            assert_eq!(
+                input.text_for_range(0..16, &mut None, window, cx),
+                Some("*".repeat(16))
+            );
+            input.replace_text_in_range(Some(0..16), "replacement-canary", window, cx);
+            assert!(input.undo_stack.is_empty());
+            assert!(input.redo_stack.is_empty());
+            input.selected_range = 0..input.content.len();
+            input.cut(&Cut, window, cx);
+            assert!(input.content.is_empty());
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().as_deref(),
+                Some("existing clipboard")
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
     fn composer_padding_and_file_prompt_restore_focus(cx: &mut gpui::TestAppContext) {
         let (dir, handle) = composer_focus_window(cx);
         let image_path = dir.path().join("attachment.png");
@@ -8768,5 +8851,14 @@ mod tests {
         let t = vec![entry(Some(MessageStatus::Streaming), vec![resolved])];
         assert!(input_request_resolved(&t, "r1"));
         assert!(!input_request_resolved(&t, "other"));
+    }
+}
+
+impl Drop for ComposerInput {
+    fn drop(&mut self) {
+        if self.secret {
+            use zeroize::Zeroize;
+            self.content.zeroize();
+        }
     }
 }

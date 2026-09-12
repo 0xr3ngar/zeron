@@ -729,6 +729,7 @@ impl AcpHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        crate::runtime_auth::apply(&mut cmd);
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(exe.display().to_string())
@@ -1164,6 +1165,12 @@ impl Harness for AcpHarness {
                 .refresh(&exe, self.model_discovery_timeout)
                 .await;
         }
+        if crate::runtime_auth::is_active() {
+            return match self.discover_models().await {
+                Ok(models) if !models.is_empty() => Ok(models),
+                _ => Ok((self.spec.models)()),
+            };
+        }
         if let Some(models) = self.models_cache.get() {
             return Ok(models.clone());
         }
@@ -1182,6 +1189,9 @@ impl Harness for AcpHarness {
     }
 
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
+        if crate::runtime_auth::is_active() {
+            return self.discover_commands().await;
+        }
         self.commands
             .get_or_try_init(|| self.discover_commands())
             .await

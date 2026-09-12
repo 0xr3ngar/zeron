@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit && npm run test:workerd",
     "test:unit": "vitest run",
+    "test:credentials": "node scripts/credential-live-test.mjs",
     "test:workerd": "vitest run -c vitest.workerd.config.ts",
     "smoke": "node scripts/smoke.mjs"
   },

@@ -242,6 +242,7 @@ struct UsageSnapshot {
 }
 
 struct Inner {
+    shared: std::sync::OnceLock<crate::shared_credentials::SharedCredentials>,
     config: AgentAccountsConfig,
     http: reqwest::Client,
     flows: Mutex<HashMap<String, LoginFlow>>,
@@ -281,6 +282,7 @@ impl AgentAccounts {
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             inner: Arc::new(Inner {
+                shared: std::sync::OnceLock::new(),
                 config,
                 http,
                 flows: Mutex::new(HashMap::new()),
@@ -288,6 +290,57 @@ impl AgentAccounts {
                 inflight_refreshes: Mutex::new(std::collections::HashSet::new()),
             }),
         }
+    }
+
+    pub fn set_shared(&self, shared: crate::shared_credentials::SharedCredentials) {
+        let _ = self.inner.shared.set(shared);
+    }
+    pub fn shared(&self) -> Result<&crate::shared_credentials::SharedCredentials, EngineError> {
+        self.inner
+            .shared
+            .get()
+            .ok_or_else(|| EngineError::Other("Shared accounts are unavailable.".into()))
+    }
+
+    /// Explicit import only. Subscription OAuth grants have a single refresh
+    /// owner and must never be copied into the replicated account document.
+    pub async fn share_account(
+        &self,
+        harness: HarnessId,
+        account_id: &str,
+    ) -> Result<(), EngineError> {
+        use crate::shared_credentials::{Provider, Secret};
+        let slot = self
+            .read_slots(harness)
+            .into_iter()
+            .find(|s| s.id == account_id)
+            .ok_or_else(|| EngineError::Other("That saved account no longer exists.".into()))?;
+        let (provider, field) = match (harness, slot.profile.auth_kind) {
+            (HarnessId::Cursor, _) => (Provider::Cursor, "apiKey"),
+            (HarnessId::Codex, AgentAuthKind::ApiKey) => (Provider::Openai, "OPENAI_API_KEY"),
+            (HarnessId::ClaudeCode, AgentAuthKind::ApiKey) => (Provider::Anthropic, "apiKey"),
+            _ => return Err(EngineError::Other("This subscription login stays on its device. Use a shared API key for independent access on other devices.".into())),
+        };
+        let key = str_field(&slot.credentials, field)
+            .ok_or_else(|| EngineError::Other("The account has no transferable API key.".into()))?;
+        let expires = slot
+            .credentials
+            .get("apiKeyExpiresAtMs")
+            .and_then(|v| v.as_i64());
+        if expires.is_some_and(|at| at <= now_ms()) {
+            return Err(EngineError::Other(
+                "This API key has expired. Sign in again before sharing it.".into(),
+            ));
+        }
+        self.shared()?
+            .add_with_expiry(
+                harness,
+                provider,
+                slot.profile.email,
+                Secret::new(key)?,
+                expires,
+            )
+            .await
     }
 
     // ── list ────────────────────────────────────────────────────────────────
@@ -383,6 +436,17 @@ impl AgentAccounts {
                 });
             }
         }
+        if let Some(shared) = self.inner.shared.get().filter(|s| s.vault().is_ready()) {
+            match shared.list().await {
+                Ok(shared_accounts) => {
+                    for account in &mut accounts {
+                        if shared_accounts.iter().any(|a| a.harness == account.harness && a.active) { account.active = false; }
+                    }
+                    accounts.extend(shared_accounts);
+                }
+                Err(_) => warnings.push(AgentAccountWarning { harness: HarnessId::Codex, message: "Shared accounts could not be refreshed. Check Shared accounts and try again.".into() }),
+            }
+        }
         Ok(AgentAccountsSnapshot { accounts, warnings })
     }
 
@@ -396,6 +460,10 @@ impl AgentAccounts {
         harness: HarnessId,
         account_id: &str,
     ) -> Result<AgentAccountsSnapshot, EngineError> {
+        if account_id.starts_with("shared:") {
+            self.shared()?.select(harness, Some(account_id)).await?;
+            return self.list(false).await;
+        }
         self.list(false).await?;
         let slot = self
             .read_slots(harness)
@@ -415,6 +483,9 @@ impl AgentAccounts {
                     "agent accounts are not supported for {other:?}"
                 )));
             }
+        }
+        if let Some(shared) = self.inner.shared.get().filter(|s| s.vault().is_ready()) {
+            shared.select(harness, None).await?;
         }
         self.list(false).await
     }
@@ -488,6 +559,11 @@ impl AgentAccounts {
         harness: HarnessId,
         account_id: &str,
     ) -> Result<AgentAccountsSnapshot, EngineError> {
+        if account_id.starts_with("shared:") {
+            self.shared()?.forget(harness, account_id).await?;
+            return self.list(false).await;
+        }
+
         // Reject anything that isn't a slot id (16 lowercase hex) BEFORE touching
         // the filesystem: `account_id` is a raw RPC string that becomes a path,
         // so a crafted id (`../../…`) must never reach `remove_file`.

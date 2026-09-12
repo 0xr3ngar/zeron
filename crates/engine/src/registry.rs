@@ -120,12 +120,13 @@ enum Slot {
 }
 
 pub struct HarnessRegistry {
-    slots: Mutex<HashMap<HarnessId, Slot>>,
-    order: Mutex<Vec<HarnessId>>,
+    credentials: Mutex<Option<(crate::shared_credentials::SharedCredentials, PathBuf)>>,
+    slots: Arc<Mutex<HashMap<HarnessId, Slot>>>,
+    order: Arc<Mutex<Vec<HarnessId>>>,
     /// This device's enabled set; `None` inner value = the default set.
-    prefs: Mutex<HarnessPrefsFile>,
+    prefs: Arc<Mutex<HarnessPrefsFile>>,
     /// Where the prefs persist; `None` (tests, bare registries) skips writes.
-    prefs_path: Mutex<Option<PathBuf>>,
+    prefs_path: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl Default for HarnessRegistry {
@@ -137,10 +138,11 @@ impl Default for HarnessRegistry {
 impl HarnessRegistry {
     pub fn new() -> Self {
         Self {
-            slots: Mutex::new(HashMap::new()),
-            order: Mutex::new(Vec::new()),
-            prefs: Mutex::new(HarnessPrefsFile::default()),
-            prefs_path: Mutex::new(None),
+            credentials: Mutex::new(None),
+            slots: Arc::new(Mutex::new(HashMap::new())),
+            order: Arc::new(Mutex::new(Vec::new())),
+            prefs: Arc::new(Mutex::new(HarnessPrefsFile::default())),
+            prefs_path: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -319,7 +321,40 @@ impl HarnessRegistry {
         }
     }
 
+    /// Credential resolution belongs to a profile, even when callers share
+    /// the native installation catalog between engines or profile switches.
+    pub fn with_credentials(
+        &self,
+        credentials: crate::shared_credentials::SharedCredentials,
+        root: PathBuf,
+    ) -> Self {
+        Self {
+            slots: self.slots.clone(),
+            order: self.order.clone(),
+            prefs: self.prefs.clone(),
+            prefs_path: self.prefs_path.clone(),
+            credentials: Mutex::new(Some((credentials, root))),
+        }
+    }
     pub fn resolve(&self, id: HarnessId) -> Result<Arc<dyn Harness>, HarnessError> {
+        let inner = self.resolve_native(id)?;
+        let guard = self
+            .credentials
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        Ok(match guard.as_ref() {
+            Some((credentials, root)) => {
+                Arc::new(crate::authenticated_harness::AuthenticatedHarness {
+                    inner,
+                    credentials: credentials.clone(),
+                    root: root.clone(),
+                })
+            }
+            None => inner,
+        })
+    }
+
+    fn resolve_native(&self, id: HarnessId) -> Result<Arc<dyn Harness>, HarnessError> {
         let mut slots = self.slots();
         match slots.get(&id) {
             Some(Slot::Ready(harness)) => Ok(harness.clone()),

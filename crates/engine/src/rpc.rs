@@ -475,6 +475,7 @@ pub struct EngineRpc {
     diff_sync: CheckoutDiffSync,
     uploads: Uploads,
     agent_accounts: AgentAccounts,
+    vault: Option<crate::vault::VaultService>,
     auth: Option<Auth>,
     links: Option<std::sync::Arc<LinkCache>>,
     updater: Option<zeron_update::Updater>,
@@ -516,12 +517,23 @@ impl EngineRpc {
             diff_sync,
             uploads,
             agent_accounts,
+            vault: None,
             auth: None,
             links: None,
             updater: None,
             local_import: None,
             engine_info,
         }
+    }
+
+    pub fn with_vault(mut self, vault: crate::vault::VaultService) -> Self {
+        self.vault = Some(vault);
+        self
+    }
+    fn vault(&self) -> Result<&crate::vault::VaultService, RpcError> {
+        self.vault
+            .as_ref()
+            .ok_or_else(|| RpcError::Failed("Shared accounts are unavailable.".into()))
     }
 
     pub fn with_previews(mut self, previews: zeron_preview::PreviewService) -> Self {
@@ -2187,6 +2199,152 @@ impl RpcService for EngineRpc {
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "ok": true }))
             }
+            // ── encrypted-sync vault ────────────────────────────────────
+            methods::VAULT_STATUS => {
+                Ok(RpcReply::Stream(watch_stream(self.vault()?.watch_status())))
+            }
+            methods::VAULT_REFRESH => {
+                let status = self
+                    .vault()?
+                    .refresh()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let value =
+                    serde_json::to_value(status).map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&value)
+            }
+            methods::VAULT_CONFIRM_RECOVERY => {
+                self.vault()?
+                    .confirm_recovery_kit()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "ok": true }))
+            }
+            methods::VAULT_SETUP => {
+                let kit = self
+                    .vault()?
+                    .setup()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&kit)
+            }
+            methods::VAULT_REQUEST_ENROLLMENT => {
+                let (request_id, pairing_code) = self
+                    .vault()?
+                    .request_enrollment()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({
+                    "requestId": request_id,
+                    "pairingCode": pairing_code,
+                }))
+            }
+            methods::VAULT_CANCEL_ENROLLMENT => {
+                self.vault()?
+                    .cancel_enrollment()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "ok": true }))
+            }
+            methods::VAULT_PENDING_REQUESTS => {
+                let requests = self
+                    .vault()?
+                    .pending_requests()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "requests": requests }))
+            }
+            methods::VAULT_APPROVE => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    request_id: String,
+                    code: String,
+                }
+                let p: P = parse_params(params)?;
+                self.vault()?
+                    .approve(&p.request_id, &p.code)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "ok": true }))
+            }
+            methods::VAULT_REJECT => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    request_id: String,
+                }
+                let p: P = parse_params(params)?;
+                self.vault()?
+                    .reject(&p.request_id)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "ok": true }))
+            }
+            methods::VAULT_REVOKE => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    device_id: String,
+                }
+                let p: P = parse_params(params)?;
+                self.vault()?
+                    .revoke(&p.device_id)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "ok": true }))
+            }
+            methods::VAULT_RECOVER => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    kit: String,
+                    #[serde(default)]
+                    genesis_hash: Option<String>,
+                }
+                let p: P = parse_params(params)?;
+                let genesis = match p.genesis_hash {
+                    Some(hex) => Some(
+                        crate::vault::store::Hex(hex)
+                            .decode::<32>()
+                            .ok_or_else(|| RpcError::BadParams("genesisHash".into()))?,
+                    ),
+                    None => None,
+                };
+                self.vault()?
+                    .recover(&p.kit, genesis)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "ok": true }))
+            }
+            methods::SHARE_AGENT_ACCOUNT => {
+                let p: AgentAccountParams = parse_params(params)?;
+                self.agent_accounts
+                    .share_account(p.harness, &p.account_id)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok": true}))
+            }
+            methods::ADD_SHARED_AGENT_KEY => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct P {
+                    harness: HarnessId,
+                    provider: crate::shared_credentials::Provider,
+                    label: String,
+                    key: String,
+                }
+                let p: P = parse_params(params)?;
+                let secret = crate::shared_credentials::Secret::new(p.key)
+                    .map_err(|e| RpcError::BadParams(e.to_string()))?;
+                self.agent_accounts
+                    .shared()
+                    .map_err(|e| RpcError::Failed(e.to_string()))?
+                    .add(p.harness, p.provider, p.label, secret)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok": true}))
+            }
             methods::LIST_AGENT_ACCOUNTS => {
                 let p: ListAgentAccountsParams = parse_params(params)?;
                 let snapshot = self
@@ -2430,5 +2588,51 @@ mod context_usage_tests {
         remote.clear_context_usage().unwrap();
         tx.send_replace(Arc::new(Vec::new()));
         assert!(stream.next().await.unwrap()["contextUsage"].is_null());
+    }
+}
+
+/// Vault management and secret-bearing submissions are only accepted over local
+/// IPC. The existing device relay is not an end-to-end encrypted channel.
+pub struct CredentialRelayGuard(pub std::sync::Arc<dyn RpcService>);
+#[async_trait]
+impl RpcService for CredentialRelayGuard {
+    async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if method.starts_with("Vault")
+            || matches!(
+                method,
+                methods::ADD_SHARED_AGENT_KEY | methods::SHARE_AGENT_ACCOUNT
+            )
+        {
+            return Err(RpcError::Failed(
+                "Credential operations require a local connection.".into(),
+            ));
+        }
+        self.0.handle(method, params).await
+    }
+}
+
+#[cfg(test)]
+mod credential_relay_tests {
+    use super::*;
+    struct Probe;
+    #[async_trait]
+    impl RpcService for Probe {
+        async fn handle(&self, _: &str, _: serde_json::Value) -> Result<RpcReply, RpcError> {
+            panic!("secret operation reached the relay target");
+        }
+    }
+    #[tokio::test]
+    async fn relay_never_accepts_vault_management_or_secret_submission() {
+        let relay = CredentialRelayGuard(std::sync::Arc::new(Probe));
+        for method in [
+            methods::VAULT_SETUP,
+            methods::VAULT_RECOVER,
+            methods::VAULT_APPROVE,
+            methods::VAULT_REVOKE,
+            methods::ADD_SHARED_AGENT_KEY,
+            methods::SHARE_AGENT_ACCOUNT,
+        ] {
+            assert!(relay.handle(method, serde_json::json!({})).await.is_err());
+        }
     }
 }

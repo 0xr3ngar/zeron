@@ -115,6 +115,19 @@ pub mod methods {
     /// Headed IPC owners do not implement this method: closing another app's
     /// engine behind its windows would leave that process unusable.
     pub const STOP_ENGINE: &str = "StopEngine";
+    pub const SHARE_AGENT_ACCOUNT: &str = "ShareAgentAccount";
+    pub const ADD_SHARED_AGENT_KEY: &str = "AddSharedAgentKey";
+    pub const VAULT_STATUS: &str = "VaultStatus";
+    pub const VAULT_REFRESH: &str = "VaultRefresh";
+    pub const VAULT_SETUP: &str = "VaultSetup";
+    pub const VAULT_CONFIRM_RECOVERY: &str = "VaultConfirmRecovery";
+    pub const VAULT_REQUEST_ENROLLMENT: &str = "VaultRequestEnrollment";
+    pub const VAULT_CANCEL_ENROLLMENT: &str = "VaultCancelEnrollment";
+    pub const VAULT_PENDING_REQUESTS: &str = "VaultPendingRequests";
+    pub const VAULT_APPROVE: &str = "VaultApprove";
+    pub const VAULT_REJECT: &str = "VaultReject";
+    pub const VAULT_REVOKE: &str = "VaultRevoke";
+    pub const VAULT_RECOVER: &str = "VaultRecover";
     pub const AUTH_STATUS: &str = "AuthStatus";
     // AuthRpc mutations (feature-inventory §2 AuthRpc; IPC-only).
     pub const SIGN_IN: &str = "SignIn";

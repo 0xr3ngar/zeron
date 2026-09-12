@@ -257,6 +257,11 @@ impl OpencodeHarness {
     /// they boot in the user's home, where global provider config lives.
     async fn server(&self, cwd: Option<&str>) -> Result<Server, HarnessError> {
         if let Some(base) = &self.base_url {
+            if crate::runtime_auth::is_active() {
+                return Err(HarnessError::Protocol(
+                    "Shared accounts require a locally managed OpenCode server".into(),
+                ));
+            }
             return Ok(Server::attached(base.clone()));
         }
         let exe = self.resolve_executable()?;
@@ -268,7 +273,11 @@ impl OpencodeHarness {
     /// and the composer's commands fetch share one boot.
     async fn probe_models(&self) -> Result<Vec<Model>, HarnessError> {
         let _guard = self.probe_lock.lock().await;
-        if let Some(models) = self.models_cache.get() {
+        if let Some(models) = self
+            .models_cache
+            .get()
+            .filter(|_| !crate::runtime_auth::is_active())
+        {
             return Ok(models.clone());
         }
         let mut server = self.server(None).await?;
@@ -282,7 +291,9 @@ impl OpencodeHarness {
                 ));
             }
             if let Ok(commands) = server.get_json("/command", None).await {
-                let _ = self.commands_cache.set(commands_from_wire(&commands));
+                if !crate::runtime_auth::is_active() {
+                    let _ = self.commands_cache.set(commands_from_wire(&commands));
+                }
             }
             Ok(models)
         }
@@ -293,7 +304,11 @@ impl OpencodeHarness {
 
     async fn probe_commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         let _guard = self.probe_lock.lock().await;
-        if let Some(commands) = self.commands_cache.get() {
+        if let Some(commands) = self
+            .commands_cache
+            .get()
+            .filter(|_| !crate::runtime_auth::is_active())
+        {
             return Ok(commands.clone());
         }
         let mut server = self.server(None).await?;
@@ -343,6 +358,9 @@ impl Harness for OpencodeHarness {
         if self.base_url.is_none() {
             self.resolve_executable()?;
         }
+        if crate::runtime_auth::is_active() {
+            return self.probe_models().await;
+        }
         self.models_cache
             .get_or_try_init(|| self.probe_models())
             .await
@@ -350,6 +368,9 @@ impl Harness for OpencodeHarness {
     }
 
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
+        if crate::runtime_auth::is_active() {
+            return self.probe_commands().await;
+        }
         self.commands_cache
             .get_or_try_init(|| self.probe_commands())
             .await
@@ -371,7 +392,11 @@ impl Harness for OpencodeHarness {
             request,
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
-            known_commands: self.commands_cache.get().cloned(),
+            known_commands: if crate::runtime_auth::is_active() {
+                None
+            } else {
+                self.commands_cache.get().cloned()
+            },
         }));
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
             rx.recv().await.map(|ev| (ev, rx))
@@ -431,6 +456,7 @@ impl Server {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        crate::runtime_auth::apply(&mut cmd);
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(exe.display().to_string())

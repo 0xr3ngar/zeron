@@ -120,6 +120,7 @@ impl CursorHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        crate::runtime_auth::apply(&mut cmd);
         let run = async {
             let output = cmd
                 .output()
@@ -210,6 +211,12 @@ impl Harness for CursorHarness {
     /// static pair when the probe fails, UNCACHED so the next picker open
     /// retries.
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        if crate::runtime_auth::is_active() {
+            return match self.discover_models().await {
+                Ok(models) if !models.is_empty() => Ok(models),
+                _ => Ok(static_models()),
+            };
+        }
         if let Some(models) = self.models_cache.get() {
             return Ok(models.clone());
         }
@@ -242,6 +249,7 @@ impl Harness for CursorHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        crate::runtime_auth::apply(&mut cmd);
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(exe.display().to_string())
@@ -946,10 +954,9 @@ mod tests {
 
     #[test]
     fn nested_frames_arrive_tagged() {
-        let frame: Value = serde_json::from_str(
-            r#"{"ev":"text","text":"sub says","parent":"call_task_1"}"#,
-        )
-        .unwrap();
+        let frame: Value =
+            serde_json::from_str(r#"{"ev":"text","text":"sub says","parent":"call_task_1"}"#)
+                .unwrap();
         assert_eq!(
             map_shim_frame(&frame, false),
             vec![AgentEvent::Subagent {
