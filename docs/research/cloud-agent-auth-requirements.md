@@ -4,6 +4,14 @@ Status: required product behavior and architecture proposal, not implemented or 
 Recorded 2026-09-12 following clarification that cloud agents must authenticate automatically.
 This supersedes the API-key-first delivery scope as the definition of feature completion.
 
+**Live evidence update:** [native harness tests](harness-auth-live-validation.md) now show
+successful credential delivery, restart, and independent concurrent workers for Codex,
+Claude Code, Grok, OpenCode (ChatGPT), and Devin. Codex's external-token recovery callback
+also passed. These results establish technical startup feasibility, while live grant refresh,
+cloud delegation, and Zeron integration remain unimplemented. Claude's documented native
+`setup-token` flow is an additional unattended subscription-auth candidate; it was missing
+from the initial investigation.
+
 ## Required experience
 
 Connect a provider once. Every authorized execution device and newly provisioned cloud

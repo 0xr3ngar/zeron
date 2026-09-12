@@ -7,6 +7,10 @@ below is groundwork, not completion of that requirement. Subscription authentica
 durable refresh ownership, and unattended worker authorization remain unimplemented.
 See [the required cloud authentication flow](cloud-agent-auth-requirements.md).
 
+Subsequent [live native-harness probes](harness-auth-live-validation.md) establish technical
+subscription credential delivery for several providers. They are separate from this PR's
+production API-key implementation and do not add OAuth support to Zeron by themselves.
+
 The Agents settings page combines installation toggles, connected accounts, and available
 usage meters. Each agent expands independently; account sync has its own compact management
 panel. There is no device switcher. Shared accounts are visible on approved devices in the
