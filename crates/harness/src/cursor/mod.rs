@@ -907,6 +907,40 @@ fn map_shim_frame(frame: &Value, interrupted: bool) -> Vec<AgentEvent> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn model_catalog_larger_than_a_pipe_buffer_is_flushed_before_exit() {
+        let Some(node) = crate::acp::find_on_paths("node", Vec::new()) else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("node_modules/@cursor/sdk");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"type":"module","exports":"./index.js"}"#,
+        )
+        .unwrap();
+        std::fs::write(package.join("index.js"), "export const Cursor = {models: {list: async () => Array.from({length: 3000}, (_,i) => ({id: String(i), displayName: 'x'.repeat(128)}))}};").unwrap();
+        let shim = dir.path().join("shim.mjs");
+        std::fs::write(&shim, super::SHIM_SOURCE).unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::process::Command::new(node)
+                .arg(shim)
+                .arg("models")
+                .current_dir(dir.path())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(result.status.success());
+        assert!(result.stdout.len() > 128 * 1024);
+        let frame: serde_json::Value =
+            serde_json::from_slice(&result.stdout).expect("complete JSON frame");
+        assert_eq!(frame["items"].as_array().unwrap().len(), 3000);
+    }
     use super::*;
 
     #[test]

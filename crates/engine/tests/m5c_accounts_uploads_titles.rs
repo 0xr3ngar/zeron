@@ -1128,6 +1128,14 @@ async fn legacy_account_migrates_without_plaintext_backup_and_corruption_is_pres
     );
     let encrypted: serde_json::Value = serde_json::from_slice(&sealed).unwrap();
     assert!(encrypted.get("ciphertext").is_some());
+    for invalid in [
+        b"{\"ciphertext\":null}".as_slice(),
+        b"{\"unknown\":true}".as_slice(),
+    ] {
+        std::fs::write(&file, invalid).unwrap();
+        assert!(accounts.list(false).await.is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), invalid);
+    }
     std::fs::write(&file, b"truncated encrypted snapshot").unwrap();
     assert!(accounts.list(false).await.is_err());
     assert_eq!(

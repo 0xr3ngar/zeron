@@ -120,7 +120,13 @@ if (process.argv[2] === "models") {
   try {
     const listed = await Cursor.models.list();
     const items = Array.isArray(listed) ? listed : (listed?.items ?? []);
-    out({ ev: "models", items });
+    // The catalog exceeds a pipe buffer. process.exit() immediately after
+    // write() truncates the JSON frame on Linux (observed at 65,530 bytes).
+    await new Promise((resolve, reject) => {
+      process.stdout.write(JSON.stringify({ ev: "models", items }) + "\n", (error) => {
+        if (error) reject(error); else resolve();
+      });
+    });
     process.exit(0);
   } catch (e) {
     fatal(`cursor model discovery failed: ${e?.message ?? e}`);

@@ -1196,18 +1196,23 @@ impl AgentAccounts {
             harness_slug(harness),
             path.file_name().unwrap_or_default().to_string_lossy()
         );
-        let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|_| {
+        #[derive(Deserialize)]
+        struct SnapshotMarker {
+            #[serde(default, deserialize_with = "present")]
+            ciphertext: bool,
+        }
+        fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+            let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+            Ok(true)
+        }
+        let value: SnapshotMarker = serde_json::from_slice(&raw).map_err(|_| {
             EngineError::Other(
                 "Account snapshot is unreadable. Its contents have been preserved.".into(),
             )
         })?;
-        let plaintext = if value.get("ciphertext").is_some() {
+        let plaintext = if value.ciphertext {
             self.inner.protection.unprotect(&binding, &raw)?
         } else {
-            // Read, seal, atomically replace: a failed migration preserves the old
-            // bytes and fails closed. No plaintext backup is created.
-            let encrypted = self.inner.protection.protect(&binding, &raw)?;
-            write_file_atomic(path, &encrypted, true)?;
             zeron_crypto::SecretBytes::from_slice(&raw)
         };
         let slot: Option<Slot> =
@@ -1222,6 +1227,12 @@ impl AgentAccounts {
             return Err(EngineError::Other(
                 "Account snapshot identity does not match its storage location.".into(),
             ));
+        }
+        if !value.ciphertext {
+            // Validate before replacing legacy bytes. Malformed files are never
+            // overwritten, and a failed migration creates no plaintext backup.
+            let encrypted = self.inner.protection.protect(&binding, &raw)?;
+            write_file_atomic(path, &encrypted, true)?;
         }
         Ok(slot)
     }

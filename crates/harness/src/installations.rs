@@ -341,7 +341,13 @@ pub async fn apply(h: HarnessId, action: InstallAction) -> Result<Installation, 
     guard.try_lock_exclusive().map_err(|_| {
         HarnessError::Install("An installation is already in progress on this device.".into())
     })?;
-    let mut state = read(&dir)?;
+    let mut state = match read(&dir) {
+        Ok(state) => state,
+        Err(error) if matches!(action, InstallAction::Rollback) => return Err(error),
+        // An explicit new selection can repair a corrupt selection file. The
+        // original bytes remain intact unless the new runtime passes checks.
+        Err(_) => Selection::default(),
+    };
     match action {
         InstallAction::Rollback => {
             let previous = state.previous.take().ok_or_else(|| {
@@ -459,6 +465,9 @@ pub async fn apply(h: HarnessId, action: InstallAction) -> Result<Installation, 
                 },
             );
         }
+    }
+    if h == HarnessId::Pi {
+        adapter_install::ensure_installed(NpmPin::parse("pi-acp@0.0.33"), "pi-acp", "Pi").await?;
     }
     save(&dir, &state)?;
     drop(guard);

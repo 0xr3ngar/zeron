@@ -69,8 +69,27 @@ fn adapters_root() -> Option<PathBuf> {
         .map(|h| PathBuf::from(h).join(".zeron").join("adapters"))
 }
 
+fn locked_dependencies(pin: &NpmPin) -> Option<&'static str> {
+    Some(match (pin.name, pin.version) {
+        ("@openai/codex", "0.153.3") => include_str!("runtime-locks/codex.json"),
+        ("@anthropic-ai/claude-code", "2.1.258") => include_str!("runtime-locks/claude.json"),
+        ("@xai-official/grok", "1.0.4") => include_str!("runtime-locks/grok.json"),
+        ("opencode-ai", "1.18.21") => include_str!("runtime-locks/opencode.json"),
+        ("@earendil-works/pi-coding-agent", "0.85.1") => include_str!("runtime-locks/pi.json"),
+        ("@cursor/sdk", "1.0.28") => include_str!("runtime-locks/cursor.json"),
+        ("pi-acp", "0.0.33") => include_str!("runtime-locks/pi-acp.json"),
+        _ => return None,
+    })
+}
 fn install_dir(pin: &NpmPin) -> Option<PathBuf> {
-    adapters_root().map(|root| root.join(pin.dir_name()).join(pin.version))
+    let root = adapters_root()?.join(pin.dir_name()).join(pin.version);
+    Some(if let Some(lock) = locked_dependencies(pin) {
+        use sha2::Digest;
+        let hash = format!("{:x}", sha2::Sha256::digest(lock.as_bytes()));
+        root.join(format!("locked-{}", &hash[..16]))
+    } else {
+        root
+    })
 }
 
 /// The package's bin entry inside an install dir, from its own package.json
@@ -177,7 +196,7 @@ pub(crate) async fn ensure_installed(
 
     let Some(npm) = find_npm() else {
         return Err(HarnessError::NotInstalled(format!(
-            "npm (required to install the {display_name} ACP adapter {}; searched \
+            "npm (required to install the {display_name} runtime {}; searched \
              PATH, the login shell's PATH, and fnm/nvm/volta/pnpm/bun install dirs)",
             pin.spec()
         )));
@@ -322,7 +341,20 @@ async fn install_into(
     std::fs::create_dir_all(tmp_dir)?;
     std::fs::create_dir_all(cache_dir)?;
     // A bare manifest keeps npm from walking up into a user project.
-    std::fs::write(tmp_dir.join("package.json"), "{\"private\":true}\n")?;
+    let locked = locked_dependencies(pin);
+    if let Some(lock) = locked {
+        let mut manifest = serde_json::from_str::<serde_json::Value>(lock)
+            .map_err(|_| HarnessError::Install("Bundled runtime lock is invalid.".into()))?["packages"][""].clone();
+        manifest["private"] = true.into();
+        std::fs::write(
+            tmp_dir.join("package.json"),
+            serde_json::to_vec(&manifest)
+                .map_err(|_| HarnessError::Install("Cannot encode runtime manifest.".into()))?,
+        )?;
+        std::fs::write(tmp_dir.join("package-lock.json"), lock)?;
+    } else {
+        std::fs::write(tmp_dir.join("package.json"), "{\"private\":true}\n")?;
+    }
     tracing::info!(
         target: "zeron_harness::adapter_install",
         package = %pin.spec(),
@@ -331,7 +363,7 @@ async fn install_into(
     );
     let mut cmd = tokio::process::Command::new(npm);
     cmd.args([
-        "install",
+        if locked.is_some() { "ci" } else { "install" },
         "--no-audit",
         "--no-fund",
         "--no-progress",
@@ -341,29 +373,37 @@ async fn install_into(
         "--include=optional",
         "--cache",
     ])
-    .arg(cache_dir)
-    .arg(pin.spec())
-    .current_dir(tmp_dir)
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .kill_on_drop(true);
+    .arg(cache_dir);
+    if locked.is_none() {
+        cmd.arg(pin.spec());
+    }
+    cmd.current_dir(tmp_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     crate::compose_child_path(&mut cmd, npm);
     let mut child = cmd.spawn()?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let drain = async {
+    async fn drain_tail(stream: Option<impl tokio::io::AsyncRead + Unpin>) -> String {
         use tokio::io::AsyncReadExt;
-        let mut out = String::new();
-        let mut err = String::new();
-        if let Some(mut s) = stdout {
-            let _ = s.read_to_string(&mut out).await;
+        let mut tail = Vec::new();
+        if let Some(mut stream) = stream {
+            let mut buffer = [0; 8192];
+            while let Ok(size) = stream.read(&mut buffer).await {
+                if size == 0 {
+                    break;
+                }
+                tail.extend_from_slice(&buffer[..size]);
+                if tail.len() > 8192 {
+                    tail.drain(..tail.len() - 8192);
+                }
+            }
         }
-        if let Some(mut s) = stderr {
-            let _ = s.read_to_string(&mut err).await;
-        }
-        (out, err)
-    };
+        String::from_utf8_lossy(&tail).into_owned()
+    }
+    let drain = async { tokio::join!(drain_tail(stdout), drain_tail(stderr)) };
     let ((out, err), status) =
         match tokio::time::timeout(INSTALL_TIMEOUT, async { tokio::join!(drain, child.wait()) })
             .await
@@ -373,7 +413,7 @@ async fn install_into(
                 let _ = child.start_kill();
                 let _ = child.wait().await;
                 return Err(HarnessError::Install(format!(
-                    "npm install of the {display_name} adapter ({}) timed out after {} minutes — \
+                    "npm install of the {display_name} runtime ({}) timed out after {} minutes — \
                  check your network and npm registry configuration",
                     pin.spec(),
                     INSTALL_TIMEOUT.as_secs() / 60
@@ -390,21 +430,28 @@ async fn install_into(
     }
     let tail: String = if output.len() > 1200 {
         // npm front-loads "npm ERR!" lines; keep the tail where the cause lands.
-        format!("…{}", &output[output.len() - 1200..])
+        format!(
+            "…{}",
+            &output[output
+                .char_indices()
+                .map(|(i, _)| i)
+                .find(|&i| i >= output.len() - 1200)
+                .unwrap_or(output.len())..]
+        )
     } else {
         output
     };
     let exit = describe_npm_exit(Some(status));
     Err(HarnessError::Install(if tail.is_empty() {
         format!(
-            "npm install of the {display_name} adapter ({}) failed silently ({exit}); \
+            "npm install of the {display_name} runtime ({}) failed silently ({exit}); \
              npm's own cache or config is likely broken — try `npm cache verify` \
              or reinstalling node/npm",
             pin.spec()
         )
     } else {
         format!(
-            "npm install of the {display_name} adapter ({}) failed ({exit}): {tail}",
+            "npm install of the {display_name} runtime ({}) failed ({exit}): {tail}",
             pin.spec()
         )
     }))
@@ -412,6 +459,35 @@ async fn install_into(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn managed_dependency_graphs_pin_the_root_and_verify_every_package() {
+        for spec in [
+            "@openai/codex@0.153.3",
+            "@anthropic-ai/claude-code@2.1.258",
+            "@xai-official/grok@1.0.4",
+            "opencode-ai@1.18.21",
+            "@earendil-works/pi-coding-agent@0.85.1",
+            "@cursor/sdk@1.0.28",
+            "pi-acp@0.0.33",
+        ] {
+            let pin = super::NpmPin::parse(spec);
+            let lock: serde_json::Value =
+                serde_json::from_str(super::locked_dependencies(&pin).unwrap()).unwrap();
+            assert_eq!(lock["packages"][""]["dependencies"][pin.name], pin.version);
+            for (path, package) in lock["packages"].as_object().unwrap() {
+                if path.is_empty() {
+                    continue;
+                }
+                assert!(
+                    package["resolved"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("https://registry.npmjs.org/")
+                );
+                assert!(!package["integrity"].as_str().unwrap().is_empty());
+            }
+        }
+    }
     use super::*;
 
     #[test]

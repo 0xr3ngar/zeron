@@ -633,6 +633,14 @@ impl AcpHarness {
         if let Some(p) = &self.executable {
             return Ok(Launch::Program(p.clone(), spec_args));
         }
+        if self.spec.id == HarnessId::Pi && crate::installations::selected(HarnessId::Pi).is_some()
+        {
+            return Ok(Launch::Managed {
+                pin: crate::adapter_install::NpmPin::parse("pi-acp@0.0.33"),
+                bin_name: "pi-acp",
+                args: spec_args,
+            });
+        }
         if self.spec.id != HarnessId::Pi
             && let Some(p) = crate::installations::selected(self.spec.id)
         {
@@ -733,6 +741,7 @@ impl AcpHarness {
             if !pi.is_file() {
                 return Err(HarnessError::NotInstalled(pi.display().to_string()));
             }
+            cmd.env("PI_ACP_PI_COMMAND", &pi);
             crate::compose_path(&mut cmd, pi.parent().into_iter().chain(exe.parent()));
         }
         if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {

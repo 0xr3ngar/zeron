@@ -1,0 +1,122 @@
+{
+  "name": "zeron-managed-runtime",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "dependencies": {
+        "@xai-official/grok": "1.0.4"
+      },
+      "name": "zeron-managed-runtime"
+    },
+    "node_modules/@iarna/toml": {
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/@iarna/toml/-/toml-3.0.0.tgz",
+      "integrity": "sha512-td6ZUkz2oS3VeleBcN+m//Q6HlCFCPrnI0FZhrt/h4XqLEdOyYp2u21nd8MdsR+WJy5r9PTDaHTDDfhf4H4l6Q=="
+    },
+    "node_modules/@xai-official/grok": {
+      "version": "1.0.4",
+      "resolved": "https://registry.npmjs.org/@xai-official/grok/-/grok-1.0.4.tgz",
+      "integrity": "sha512-Nu3SFXTqwvCQr/LQFwrQYgngJhUQwX2h9ZSgzW4HowidjbPBWtMVO0xI88d2z6/zlDSNaT5YP/uk+2DthKQMsg==",
+      "cpu": [
+        "arm64",
+        "x64"
+      ],
+      "hasInstallScript": true,
+      "os": [
+        "darwin",
+        "linux",
+        "win32"
+      ],
+      "dependencies": {
+        "@iarna/toml": "^3.0.0"
+      },
+      "bin": {
+        "grok": "bin/grok"
+      },
+      "engines": {
+        "node": ">=20"
+      },
+      "optionalDependencies": {
+        "@xai-official/grok-darwin-arm64": "1.0.4",
+        "@xai-official/grok-darwin-x64": "1.0.4",
+        "@xai-official/grok-linux-arm64": "1.0.4",
+        "@xai-official/grok-linux-x64": "1.0.4",
+        "@xai-official/grok-win32-arm64": "1.0.4",
+        "@xai-official/grok-win32-x64": "1.0.4"
+      }
+    },
+    "node_modules/@xai-official/grok-darwin-arm64": {
+      "version": "1.0.4",
+      "resolved": "https://registry.npmjs.org/@xai-official/grok-darwin-arm64/-/grok-darwin-arm64-1.0.4.tgz",
+      "integrity": "sha512-ddb7tn+7ygDCpqGAsw1ZQkirePoPa7bm91wxWVxv9ePqIyrOiaDBluE3NMSjt2JMwqbcUbMtmg0CMKVb4N9oHw==",
+      "cpu": [
+        "arm64"
+      ],
+      "optional": true,
+      "os": [
+        "darwin"
+      ]
+    },
+    "node_modules/@xai-official/grok-darwin-x64": {
+      "version": "1.0.4",
+      "resolved": "https://registry.npmjs.org/@xai-official/grok-darwin-x64/-/grok-darwin-x64-1.0.4.tgz",
+      "integrity": "sha512-wa64leotS6aKNOhgunqJcfIhyq3e7Ihy/Xcd2zNExmZWjYYTajoUfImRLshzS407PdPgyiABSD+tZgOLcagP8A==",
+      "cpu": [
+        "x64"
+      ],
+      "optional": true,
+      "os": [
+        "darwin"
+      ]
+    },
+    "node_modules/@xai-official/grok-linux-arm64": {
+      "version": "1.0.4",
+      "resolved": "https://registry.npmjs.org/@xai-official/grok-linux-arm64/-/grok-linux-arm64-1.0.4.tgz",
+      "integrity": "sha512-zGK42Eq3ZmIa7cSVnl6CiJ4cxTCMsNLQCmCoLJhy5eZXfAvZ1DA3K3HXmKCj4OScX8SalYlp7mx8HWl9Y6gytw==",
+      "cpu": [
+        "arm64"
+      ],
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@xai-official/grok-linux-x64": {
+      "version": "1.0.4",
+      "resolved": "https://registry.npmjs.org/@xai-official/grok-linux-x64/-/grok-linux-x64-1.0.4.tgz",
+      "integrity": "sha512-Dan2LfKcFBiabuDGHaGgMT8Ndzibo2ljvSjh4MlpV5117JL+S/0KMbdyYpk+13d7t+4znniW1cm+rRwUGSAvtw==",
+      "cpu": [
+        "x64"
+      ],
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@xai-official/grok-win32-arm64": {
+      "version": "1.0.4",
+      "resolved": "https://registry.npmjs.org/@xai-official/grok-win32-arm64/-/grok-win32-arm64-1.0.4.tgz",
+      "integrity": "sha512-/ymGVi5ugsz7gwuuu6Neaj5L1w/KejVNa5XDpSb5k9vC5VXEew6OieNr1/kgLGldFKPPOluw4zJ5BR5B82BdiQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "optional": true,
+      "os": [
+        "win32"
+      ]
+    },
+    "node_modules/@xai-official/grok-win32-x64": {
+      "version": "1.0.4",
+      "resolved": "https://registry.npmjs.org/@xai-official/grok-win32-x64/-/grok-win32-x64-1.0.4.tgz",
+      "integrity": "sha512-9HAVDQTEmtOB2HPZtRaRRdY5P0cDXWGmMEE8CKAbOfBS4gmWJQbVrOQbitIjq/fU568aYrfMrHnXZsjwtbx9Ww==",
+      "cpu": [
+        "x64"
+      ],
+      "optional": true,
+      "os": [
+        "win32"
+      ]
+    }
+  }
+}
