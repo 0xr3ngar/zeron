@@ -204,6 +204,74 @@ impl AccountsPage {
         cx.notify();
     }
 
+    #[cfg(feature = "browser-fixture")]
+    pub(crate) fn fixture_action(&mut self, action: &str, cx: &mut Context<Self>) {
+        if let Some(action) = action.strip_prefix("security-") {
+            self.security
+                .update(cx, |panel, cx| panel.fixture_action(action, cx));
+            return;
+        }
+        match action {
+            "connect-codex" | "connect-hermes" => {
+                let harness = if action == "connect-codex" {
+                    HarnessId::Codex
+                } else {
+                    HarnessId::Hermes
+                };
+                self.expanded.insert(harness);
+                self.open_key(harness, cx);
+                let label = if harness == HarnessId::Codex {
+                    "Work OpenAI"
+                } else {
+                    "Research · Anthropic"
+                };
+                self.label_input
+                    .update(cx, |input, cx| input.set_text(label, cx));
+                self.key_input.update(cx, |input, cx| {
+                    input.set_text("sk-fixture-not-a-real-key", cx)
+                });
+            }
+            "refresh" => self.load(false, cx),
+            "submit-key" => self.submit_key(cx),
+            "cancel-key" => self.close_key(cx),
+            "switch" | "forget" => {
+                let label = if action == "switch" {
+                    "Personal OpenAI"
+                } else {
+                    "Work OpenAI"
+                };
+                let account = self
+                    .snapshot
+                    .ready()
+                    .unwrap()
+                    .accounts
+                    .iter()
+                    .find(|a| a.display_name.as_deref() == Some(label))
+                    .unwrap()
+                    .clone();
+                self.account_action(
+                    if action == "switch" {
+                        methods::ACTIVATE_AGENT_ACCOUNT
+                    } else {
+                        methods::FORGET_AGENT_ACCOUNT
+                    },
+                    &account,
+                    cx,
+                );
+            }
+            _ => panic!("unknown account fixture action: {action}"),
+        }
+        cx.notify();
+    }
+
+    #[cfg(feature = "browser-fixture")]
+    pub(crate) fn fixture_idle(&self, cx: &gpui::App) -> bool {
+        self.snapshot.ready().is_some()
+            && !self.key_busy
+            && self.busy_account.is_none()
+            && self.security.read(cx).fixture_idle()
+    }
+
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let observe = cx.observe(&state, |_, _, cx| cx.notify());
         let code_input = cx.new(|cx| ComposerInput::new("Paste the authorization code", cx));

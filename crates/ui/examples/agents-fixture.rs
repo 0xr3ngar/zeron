@@ -54,33 +54,193 @@ fn capture(directory: &std::path::Path, name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-struct FixtureRpc(Arc<dyn RpcService>);
-#[async_trait::async_trait]
-impl RpcService for FixtureRpc {
-    async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
-        match method {
-            methods::LIST_AGENT_ACCOUNTS => RpcReply::value(&serde_json::json!({"accounts": [
+const SECOND_DEVICE: &str = "22222222222222222222222222222222";
+const SAMPLE_KIT: &str = "AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA";
+
+fn ready_status(two_devices: bool) -> serde_json::Value {
+    let mut devices = vec![
+        serde_json::json!({"deviceId":"11111111111111111111111111111111","status":"active","thisDevice":true}),
+    ];
+    if two_devices {
+        devices.push(
+            serde_json::json!({"deviceId":SECOND_DEVICE,"status":"active","thisDevice":false}),
+        );
+    }
+    serde_json::json!({"phase":"ready","protection":"keychain","epoch":1,"devices":devices})
+}
+struct FixtureState {
+    status: serde_json::Value,
+    accounts: serde_json::Value,
+    pending: Vec<serde_json::Value>,
+    fail_next_key: bool,
+    calls: Vec<String>,
+}
+impl FixtureState {
+    fn new() -> Self {
+        Self {
+            status: ready_status(true),
+            accounts: serde_json::json!({"accounts": [
                 {"id":"native-claude","harness":"claude-code","email":"avery@example.com","planLabel":"Max","active":true,"authKind":"oauth","switchable":true,"usageWindows":[{"label":"Session","usedFraction":0.28,"resetsAt":"2026-09-13T02:00:00Z"},{"label":"Weekly","usedFraction":0.61,"resetsAt":"2026-09-16T00:00:00Z"}]},
                 {"id":"shared:11111111-1111-4111-8111-111111111111","harness":"codex","displayName":"Personal OpenAI","active":true,"authKind":"api-key","switchable":true,"usageWindows":[]},
                 {"id":"shared:22222222-2222-4222-8222-222222222222","harness":"cursor","email":"avery@example.com","active":true,"authKind":"api-key","switchable":true,"usageWindows":[]},
                 {"id":"shared:33333333-3333-4333-8333-333333333333","harness":"hermes","displayName":"Research · Anthropic","active":true,"authKind":"api-key","switchable":true,"usageWindows":[]}
-            ],"warnings":[]})),
-            methods::LIST_HARNESSES => {
-                let mut rows = zeron_engine::default_registry().descriptors();
-                rows.retain(|r| r.id != HarnessId::Mock);
-                for row in &mut rows {
-                    row.installed = true;
-                    row.enabled = Some(true);
-                }
-                RpcReply::value(&rows)
-            }
-            methods::VAULT_REFRESH => RpcReply::value(
-                &serde_json::json!({"phase":"ready","protection":"keychain","epoch":1,"devices":[{"deviceId":"11111111111111111111111111111111","status":"active","thisDevice":true},{"deviceId":"22222222222222222222222222222222","status":"active","thisDevice":false}]}),
-            ),
-            methods::VAULT_PENDING_REQUESTS => RpcReply::value(&serde_json::json!({"requests":[]})),
-            _ => self.0.handle(method, params).await,
+            ],"warnings":[]}),
+            pending: vec![],
+            fail_next_key: false,
+            calls: vec![],
         }
     }
+    fn handle(
+        &mut self,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Option<Result<RpcReply, RpcError>> {
+        self.calls.push(method.into());
+        let value = match method {
+            methods::LIST_AGENT_ACCOUNTS => {
+                let mut snapshot = self.accounts.clone();
+                if self.status["phase"] != "ready" {
+                    snapshot["accounts"]
+                        .as_array_mut()
+                        .unwrap()
+                        .retain(|a| !a["id"].as_str().unwrap().starts_with("shared:"));
+                }
+                snapshot
+            }
+            methods::VAULT_REFRESH => self.status.clone(),
+            methods::VAULT_PENDING_REQUESTS => serde_json::json!({"requests":self.pending}),
+            methods::VAULT_SETUP => {
+                self.status = serde_json::json!({"phase":"recoveryConfirmationRequired","protection":"keychain"});
+                serde_json::json!({"kit":SAMPLE_KIT,"recoveryFile":{"fixture":true,"warning":"Synthetic screenshot data; not a usable recovery key"}})
+            }
+            methods::VAULT_CONFIRM_RECOVERY => {
+                self.status = ready_status(false);
+                serde_json::json!({"ok":true})
+            }
+            methods::VAULT_REQUEST_ENROLLMENT => {
+                self.status = serde_json::json!({"phase":"pending","pairingCode":"4821-7396","protection":"keychain"});
+                serde_json::json!({"requestId":"fixture-request","pairingCode":"4821-7396"})
+            }
+            methods::VAULT_APPROVE => {
+                assert_eq!(params["code"], "4821-7396");
+                self.status = ready_status(true);
+                self.pending.clear();
+                serde_json::json!({"ok":true})
+            }
+            methods::VAULT_REVOKE => {
+                assert_eq!(params["deviceId"], SECOND_DEVICE);
+                self.status["epoch"] = serde_json::json!(2);
+                self.status["devices"][1]["status"] = serde_json::json!("revoked");
+                serde_json::json!({"ok":true})
+            }
+            methods::VAULT_RECOVER => {
+                assert_eq!(params["kit"], SAMPLE_KIT);
+                self.status = ready_status(true);
+                self.status["epoch"] = serde_json::json!(3);
+                self.status["devices"][0]["thisDevice"] = serde_json::json!(false);
+                self.status["devices"][1]["status"] = serde_json::json!("revoked");
+                self.status["devices"].as_array_mut().unwrap().push(serde_json::json!({"deviceId":"33333333333333333333333333333333","status":"active","thisDevice":true}));
+                serde_json::json!({"ok":true})
+            }
+            methods::ADD_SHARED_AGENT_KEY => {
+                if self.fail_next_key {
+                    self.fail_next_key = false;
+                    return Some(Err(RpcError::Failed(
+                        "Accounts changed on another device. Refresh and retry the change.".into(),
+                    )));
+                }
+                assert_eq!(params["key"], "sk-fixture-not-a-real-key");
+                let accounts = self.accounts["accounts"].as_array_mut().unwrap();
+                for account in accounts
+                    .iter_mut()
+                    .filter(|a| a["harness"] == params["harness"])
+                {
+                    account["active"] = serde_json::json!(false);
+                }
+                accounts.push(serde_json::json!({"id":"shared:44444444-4444-4444-8444-444444444444","harness":params["harness"],"displayName":params["label"],"active":true,"authKind":"api-key","switchable":true,"usageWindows":[]}));
+                serde_json::json!({"ok":true})
+            }
+            methods::ACTIVATE_AGENT_ACCOUNT => {
+                for account in self.accounts["accounts"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .filter(|a| a["harness"] == params["harness"])
+                {
+                    account["active"] = serde_json::json!(account["id"] == params["accountId"]);
+                }
+                self.accounts.clone()
+            }
+            methods::FORGET_AGENT_ACCOUNT => {
+                self.accounts["accounts"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|a| a["id"] != params["accountId"]);
+                self.accounts.clone()
+            }
+            _ => return None,
+        };
+        Some(RpcReply::value(&value))
+    }
+}
+struct FixtureRpc {
+    inner: Arc<dyn RpcService>,
+    state: Arc<std::sync::Mutex<FixtureState>>,
+}
+#[async_trait::async_trait]
+impl RpcService for FixtureRpc {
+    async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if method == methods::LIST_HARNESSES {
+            let mut rows = zeron_engine::default_registry().descriptors();
+            rows.retain(|r| r.id != HarnessId::Mock);
+            for row in &mut rows {
+                row.installed = true;
+                row.enabled = Some(true);
+            }
+            return RpcReply::value(&rows);
+        }
+        if let Some(reply) = self.state.lock().unwrap().handle(method, &params) {
+            return reply;
+        }
+        self.inner.handle(method, params).await
+    }
+}
+
+async fn capture_step(
+    window: gpui::WindowHandle<shell::Shell>,
+    cx: &mut AsyncApp,
+    output: &std::path::Path,
+    action: Option<&str>,
+    name: &str,
+) -> anyhow::Result<()> {
+    for _ in 0..400 {
+        pause(cx, 25).await;
+        if window.read_with(cx, |shell, cx| shell.fixture_agents_idle(cx))? {
+            break;
+        }
+    }
+    anyhow::ensure!(
+        window.read_with(cx, |shell, cx| shell.fixture_agents_idle(cx))?,
+        "Agents fixture did not load: {name}"
+    );
+    if let Some(action) = action {
+        window.update(cx, |shell, _, cx| shell.fixture_agents_action(action, cx))?;
+    }
+    // Wait for the real page's RPC actions and loads, then allow native layout/paint.
+    for _ in 0..400 {
+        pause(cx, 25).await;
+        if window.read_with(cx, |shell, cx| shell.fixture_agents_idle(cx))? {
+            break;
+        }
+    }
+    anyhow::ensure!(
+        window.read_with(cx, |shell, cx| shell.fixture_agents_idle(cx))?,
+        "Agents fixture did not settle: {name}"
+    );
+    pause(cx, 200).await;
+    capture(output, name)?;
+    println!("Captured {name}");
+    Ok(())
 }
 fn main() -> anyhow::Result<()> {
     let output = PathBuf::from(std::env::args().nth(1).expect("capture directory"));
@@ -98,9 +258,13 @@ fn main() -> anyhow::Result<()> {
     let ipc_port = std::net::TcpListener::bind("127.0.0.1:0")?
         .local_addr()?
         .port();
+    let fixture = Arc::new(std::sync::Mutex::new(FixtureState::new()));
     let _ipc = runtime.block_on(zeron_engine::serve_ipc(
         ipc_port,
-        Arc::new(FixtureRpc(core.rpc_service())),
+        Arc::new(FixtureRpc {
+            inner: core.rpc_service(),
+            state: fixture.clone(),
+        }),
     ))?;
     let data = temp.path().join("ui");
     std::fs::create_dir(&data)?;
@@ -198,6 +362,57 @@ fn main() -> anyhow::Result<()> {
                     cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Light, cx));
                     pause(cx, 500).await;
                     capture(&output, "agents-accounts-light")?;
+                    cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Dark, cx));
+                    fixture.lock().unwrap().accounts["accounts"].as_array_mut().unwrap().retain(|a| !a["id"].as_str().unwrap().starts_with("shared:"));
+                    fixture.lock().unwrap().status = serde_json::json!({"phase":"notEnrolled","remoteVault":false,"protection":"keychain"});
+                    window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
+                    capture_step(window, cx, &output, None, "flow-01-set-up-encryption").await?;
+                    capture_step(window, cx, &output, Some("security-setup"), "flow-02-save-recovery-kit").await?;
+                    capture_step(window, cx, &output, Some("security-confirm"), "flow-03-encryption-ready").await?;
+
+                    fixture.lock().unwrap().accounts = FixtureState::new().accounts;
+                    fixture.lock().unwrap().status = serde_json::json!({"phase":"notEnrolled","remoteVault":true,"protection":"keychain"});
+                    window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
+                    capture_step(window, cx, &output, None, "flow-04-new-device").await?;
+                    capture_step(window, cx, &output, Some("security-enroll"), "flow-05-comparison-code").await?;
+                    {
+                        let mut f = fixture.lock().unwrap(); f.status = ready_status(false);
+                        f.pending = vec![serde_json::json!({"requestId":"fixture-request","deviceId":SECOND_DEVICE,"pairingCode":"4821-7396"})];
+                    }
+                    window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
+                    capture_step(window, cx, &output, None, "flow-06-approve-matching-device").await?;
+                    capture_step(window, cx, &output, Some("security-approve"), "flow-07-device-approved").await?;
+                    capture_step(window, cx, &output, Some("security-manage"), "flow-08-manage-approved-devices").await?;
+
+                    window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
+                    capture_step(window, cx, &output, None, "flow-09-ready-to-connect").await?;
+                    capture_step(window, cx, &output, Some("connect-codex"), "flow-10-connect-shared-account").await?;
+                    capture_step(window, cx, &output, Some("submit-key"), "flow-11-shared-account-connected").await?;
+                    capture_step(window, cx, &output, Some("switch"), "flow-12-account-switched").await?;
+                    capture_step(window, cx, &output, Some("forget"), "flow-13-account-removed").await?;
+                    capture_step(window, cx, &output, Some("connect-hermes"), "flow-14-hermes-provider-options").await?;
+                    fixture.lock().unwrap().fail_next_key = true;
+                    capture_step(window, cx, &output, Some("submit-key"), "flow-15-concurrent-change-error").await?;
+                    capture_step(window, cx, &output, Some("cancel-key"), "flow-16-key-dialog-dismissed").await?;
+
+                    window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
+                    capture_step(window, cx, &output, Some("security-manage"), "flow-17-before-device-removal").await?;
+                    capture_step(window, cx, &output, Some("security-revoke"), "flow-18-device-access-removed").await?;
+                    fixture.lock().unwrap().status = serde_json::json!({"phase":"revoked","protection":"keychain"});
+                    window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
+                    capture_step(window, cx, &output, None, "flow-19-removed-device").await?;
+                    fixture.lock().unwrap().status = serde_json::json!({"phase":"notEnrolled","remoteVault":true,"protection":"keychain"});
+                    window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
+                    capture_step(window, cx, &output, Some("security-recover"), "flow-20-recover-with-key").await?;
+                    capture_step(window, cx, &output, Some("security-submit-recovery"), "flow-21-recovered-device").await?;
+                    window.update(cx, |shell, _, cx| shell.fixture_agents_action("refresh", cx))?;
+                    capture_step(window, cx, &output, Some("security-manage"), "flow-22-recovered-new-epoch").await?;
+                    fixture.lock().unwrap().status = serde_json::json!({"phase":"locked","protection":"keychain","reason":"Unlock your OS credential store and try again."});
+                    window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
+                    capture_step(window, cx, &output, None, "flow-23-locked-device").await?;
+                    for expected in [methods::VAULT_SETUP, methods::VAULT_CONFIRM_RECOVERY, methods::VAULT_REQUEST_ENROLLMENT, methods::VAULT_APPROVE, methods::VAULT_REVOKE, methods::VAULT_RECOVER, methods::ADD_SHARED_AGENT_KEY, methods::ACTIVATE_AGENT_ACCOUNT, methods::FORGET_AGENT_ACCOUNT] {
+                        anyhow::ensure!(fixture.lock().unwrap().calls.iter().any(|call| call == expected), "flow never exercised {expected}");
+                    }
                     Ok(())
                 }
                 .await;

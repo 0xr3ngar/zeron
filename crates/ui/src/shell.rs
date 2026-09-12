@@ -10513,6 +10513,17 @@ impl Shell {
             page.update(cx, |page, cx| page.fixture_expand(harness, cx));
         }
     }
+    pub fn fixture_agents_action(&mut self, action: &str, cx: &mut Context<Self>) {
+        self.accounts_page
+            .as_ref()
+            .expect("Agents fixture page")
+            .update(cx, |page, cx| page.fixture_action(action, cx));
+    }
+    pub fn fixture_agents_idle(&self, cx: &gpui::App) -> bool {
+        self.accounts_page
+            .as_ref()
+            .is_some_and(|page| page.read(cx).fixture_idle(cx))
+    }
     pub fn fixture_open_browser(
         &mut self,
         url: Option<String>,

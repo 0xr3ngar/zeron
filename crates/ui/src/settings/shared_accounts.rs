@@ -80,6 +80,47 @@ pub fn phase_copy(status: &Value) -> (&'static str, String) {
 }
 
 impl SharedAccountsPanel {
+    #[cfg(feature = "browser-fixture")]
+    pub(crate) fn fixture_action(&mut self, action: &str, cx: &mut Context<Self>) {
+        match action {
+            "manage" => self.expanded = true,
+            "setup" => self.setup(cx),
+            "confirm" => self.action(
+                methods::VAULT_CONFIRM_RECOVERY,
+                serde_json::json!({}),
+                |page, _| page.kit = None,
+                cx,
+            ),
+            "enroll" => self.request_enrollment(cx),
+            "approve" => {
+                let request = self.pending.first().expect("pending fixture enrollment");
+                self.approve(
+                    request["requestId"].as_str().unwrap().into(),
+                    request["pairingCode"].as_str().unwrap().into(),
+                    cx,
+                );
+            }
+            "revoke" => self.revoke("22222222222222222222222222222222".into(), cx),
+            "recover" => {
+                self.open_recover(cx);
+                self.prompt.as_ref().unwrap().input.update(cx, |input, cx| {
+                    input.set_text(
+                        "AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA",
+                        cx,
+                    )
+                });
+            }
+            "submit-recovery" => self.submit_prompt(cx),
+            _ => panic!("unknown security fixture action: {action}"),
+        }
+        cx.notify();
+    }
+
+    #[cfg(feature = "browser-fixture")]
+    pub(crate) fn fixture_idle(&self) -> bool {
+        self.status.ready().is_some() && self.load_task.is_none() && !self.busy
+    }
+
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let observe = cx.observe(&state, |_, _, cx| cx.notify());
         let mut page = Self {
@@ -453,7 +494,7 @@ impl SharedAccountsPanel {
                     .child(SharedString::from(format!(
                         "Key epoch {epoch} · keys protected by {}",
                         match protection.as_str() {
-                            "keychain" => "the macOS Keychain",
+                            "keychain" => "the OS credential store",
                             "systemdCredential" => "a systemd credential (unattended)",
                             "keyFile" => "an operator key file (unattended)",
                             _ => "this process only",
@@ -625,6 +666,8 @@ impl SharedAccountsPanel {
                     widgets::card_row(theme, true).child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .whitespace_normal()
                             .flex()
                             .flex_col()
                             .gap(px(6.0))
@@ -929,7 +972,10 @@ impl Render for SharedAccountsPanel {
                                 .mt(px(3.0))
                                 .text_size(crate::typography::ui_rems(11.5))
                                 .text_color(theme.text_muted)
-                                .child(format!("End-to-end encrypted · {count} approved devices")),
+                                .child(format!(
+                                    "End-to-end encrypted · {count} approved {}",
+                                    if count == 1 { "device" } else { "devices" }
+                                )),
                         ),
                 )
                 .child(
