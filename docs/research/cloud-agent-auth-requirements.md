@@ -61,6 +61,7 @@ current single encrypted accounts document provides; full-vault membership is no
 
 | Connection | Evidence and remaining work |
 | --- | --- |
+| Claude Managed Agents | Sprites documents automatic per-session sandbox provisioning: Anthropic runs the agent loop, while a tool runner in the Sprite authenticates using an environment key. A Claude API key creates environments/sessions and stays outside the Sprite. This is a supported cloud execution candidate, distinct from transferring an existing Claude Code subscription login. Zeron would need a Managed Agents integration, not just a credential adapter for the existing Claude Code harness. |
 | Codex ChatGPT | App-server documents experimental external access tokens and refresh callbacks. Implement a managed, compatible runtime and durable grant owner; validate supported grant acquisition and refresh, simultaneous workers, and restart recovery. The callback interface alone does not implement ownership or crash recovery. |
 | Claude subscription | Current Anthropic rules restrict third-party collection/storage/brokering of subscription tokens, while allowing native sign-in to hosted unmodified Claude Code. Investigate persistent user-owned native auth environments and seek a supported delegation/provisioning contract where needed. Persistence alone does not prove safe concurrent execution or arbitrary host transfer. This is unresolved, not evidence that users must log in on every new worker. |
 | Grok OAuth | The documented external auth helper can obtain tokens noninteractively. Validate the installed version, issuer, refresh ownership, and helper deadlines before enabling it. |
@@ -71,6 +72,15 @@ Sources checked 2026-09-12: [Codex external-token authentication](https://learn.
 [Claude credential-use rules](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use),
 [Grok external auth provider](https://docs.x.ai/build/enterprise).
 Additional provider source evidence is in [the provider investigation](cross-device-auth.md).
+
+The [Sprites Managed Agents integration](https://docs.sprites.dev/integrations/claude-managed-agents/)
+and [Anthropic self-hosted sandbox documentation](https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes)
+establish a concrete automatic cloud-worker auth path. Environment-key creation currently
+requires the Claude Console once, not a login per worker. The example forwards an
+environment credential to workers; do not describe it as a job-scoped credential without
+validating its actual authority and adding the required isolation. This evidence resolves
+cloud-provisioning feasibility for Managed Agents; subscription-login transfer remains a
+separate integration question. No live Managed Agents session has been tested here.
 
 ## Required end-to-end evidence
 
