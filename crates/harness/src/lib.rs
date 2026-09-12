@@ -116,6 +116,8 @@ pub(crate) mod adapter_install;
 pub mod claude;
 pub mod codex;
 pub mod cursor;
+pub mod installations;
+mod installations_download;
 pub(crate) mod jsonrpc;
 pub mod mock;
 pub mod opencode;

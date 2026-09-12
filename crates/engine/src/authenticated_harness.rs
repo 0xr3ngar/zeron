@@ -38,6 +38,38 @@ impl AuthenticatedHarness {
         std::fs::create_dir_all(&root)?;
         #[cfg(unix)]
         std::fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+        // Device-local customization is not replicated with account secrets.
+        let home = crate::repos::home_dir();
+        let (native, customizations): (PathBuf, &[&str]) = match self.id() {
+            HarnessId::ClaudeCode => (
+                std::env::var_os("CLAUDE_CONFIG_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".claude")),
+                &["plugins", "skills", "agents", "commands"],
+            ),
+            HarnessId::Codex => (
+                std::env::var_os("CODEX_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".codex")),
+                &["skills", "agents", "plugins", "rules"],
+            ),
+            HarnessId::Pi => (
+                std::env::var_os("PI_CODING_AGENT_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".pi/agent")),
+                &["extensions", "skills", "prompts", "themes"],
+            ),
+            HarnessId::Hermes => (
+                std::env::var_os("HERMES_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".hermes")),
+                &["skills", "plugins"],
+            ),
+            _ => (home, &[]),
+        };
+        for item in customizations {
+            customization_link(&native.join(item), &root.join(item))?;
+        }
         let mut env = vec![(
             account.provider.environment().into(),
             account.secret.expose().into(),
@@ -135,6 +167,15 @@ fn write_config(path: &Path, contents: &[u8]) -> Result<(), HarnessError> {
     file.persist(path).map_err(|e| HarnessError::Io(e.error))?;
     Ok(())
 }
+fn customization_link(source: &Path, target: &Path) -> Result<(), HarnessError> {
+    if !source.exists() || target.symlink_metadata().is_ok() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(source, target)?;
+    Ok(())
+}
+
 fn policy_link(source: &Path, target: &Path) -> Result<(), HarnessError> {
     if !source.exists() || target.symlink_metadata().is_ok() {
         return Ok(());

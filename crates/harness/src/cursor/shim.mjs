@@ -56,6 +56,11 @@ try {
   fatal(`@cursor/sdk failed to load: ${e?.message ?? e}`);
 }
 const { Agent, Cursor, FileCredentialStore, JsonlLocalAgentStore } = sdk;
+if (process.argv[2] === "--version") {
+  // Reached only after the pinned SDK and its native dependencies load.
+  process.stdout.write("1.0.28\n");
+  process.exit(0);
+}
 
 // ---- per-run agent store --------------------------------------------------
 // The SDK's default local store is SQLite keyed by WORKSPACE

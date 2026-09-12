@@ -131,6 +131,9 @@ const INSTALL_HINT: &str = "opencode (searched PATH, the login shell's PATH, ~/.
      OPENCODE_EXECUTABLE to override)";
 
 fn resolve_opencode_executable() -> Option<PathBuf> {
+    if let Some(path) = crate::installations::selected(HarnessId::Opencode) {
+        return Some(path);
+    }
     if let Some(path) = std::env::var_os("OPENCODE_EXECUTABLE") {
         let path = PathBuf::from(path);
         if path.exists() {
@@ -344,7 +347,7 @@ impl Harness for OpencodeHarness {
     fn installed(&self) -> bool {
         self.executable.is_some()
             || self.base_url.is_some()
-            || resolve_opencode_executable().is_some()
+            || resolve_opencode_executable().is_some_and(|p| p.is_file())
     }
     /// `session.status{idle}` is a real terminal frame per turn: the engine
     /// can retire its quiesce watchdogs.

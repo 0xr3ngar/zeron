@@ -64,6 +64,9 @@ use wire::{ControlRequestFrame, Frame, allow_response, control_response_line};
 /// [`crate::shell_env`]), then known install locations as a last resort.
 /// Resolved per call — cheap after the snapshot is cached.
 fn resolve_claude_executable() -> Option<PathBuf> {
+    if let Some(path) = crate::installations::selected(HarnessId::ClaudeCode) {
+        return Some(path);
+    }
     if let Some(p) = std::env::var_os("CLAUDE_CODE_EXECUTABLE")
         && !p.is_empty()
     {
@@ -383,7 +386,7 @@ impl Harness for ClaudeHarness {
         ]
     }
     fn installed(&self) -> bool {
-        self.executable.is_some() || resolve_claude_executable().is_some()
+        self.executable.is_some() || resolve_claude_executable().is_some_and(|p| p.is_file())
     }
     /// Done is the CLI's own terminal frame, for wake turns too.
     fn deterministic_turn_end(&self) -> bool {

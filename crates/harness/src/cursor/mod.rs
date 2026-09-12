@@ -55,9 +55,9 @@ use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_ch
 
 /// The pinned SDK (public beta 1.0.x line; inspected against 1.0.28's
 /// typings). Bump deliberately — see the module header.
-const CURSOR_SDK_PIN: &str = "@cursor/sdk@1.0.28";
-const SHIM_NAME: &str = "zeron-cursor-shim.mjs";
-const SHIM_SOURCE: &str = include_str!("shim.mjs");
+pub(crate) const CURSOR_SDK_PIN: &str = "@cursor/sdk@1.0.28";
+pub(crate) const SHIM_NAME: &str = "zeron-cursor-shim.mjs";
+pub(crate) const SHIM_SOURCE: &str = include_str!("shim.mjs");
 
 fn cursor_cli_paths() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -149,6 +149,9 @@ impl CursorHarness {
         if let Some(p) = &self.executable {
             return Ok((p.clone(), Vec::new()));
         }
+        if let Some(p) = crate::installations::selected(HarnessId::Cursor) {
+            return Ok((p, Vec::new()));
+        }
         if let Some(p) = std::env::var_os("CURSOR_SDK_SHIM_EXECUTABLE")
             && !p.is_empty()
         {
@@ -198,6 +201,9 @@ impl Harness for CursorHarness {
     /// user-visible signal they use Cursor (the SDK itself is a managed
     /// install zeron performs on demand).
     fn installed(&self) -> bool {
+        if let Some(p) = crate::installations::selected(HarnessId::Cursor) {
+            return p.is_file();
+        }
         self.executable.is_some()
             || crate::acp::find_on_paths("cursor-agent", cursor_cli_paths()).is_some()
     }

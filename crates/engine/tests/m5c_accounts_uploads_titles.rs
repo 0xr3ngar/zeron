@@ -37,7 +37,13 @@ fn test_accounts(root: &Path) -> (AgentAccounts, AgentAccountsConfig) {
         codex_home: root.join("codex"),
         cursor_sdk_auth_file: root.join("cursor-sdk").join("auth.json"),
     };
-    (AgentAccounts::new(config.clone()), config)
+    (
+        AgentAccounts::with_protection(
+            config.clone(),
+            Box::new(zeron_engine::vault::store::MemoryProtection::new()),
+        ),
+        config,
+    )
 }
 
 fn write_claude_login(config: &AgentAccountsConfig, email: &str, uuid: &str, token: &str) {
@@ -817,7 +823,8 @@ async fn rename_worktree_branch_guards_and_collisions() {
 #[tokio::test]
 async fn rpc_dispatch_for_m5c_methods() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let core = assemble_with_mock(&tmp.path().join("data"), Vec::new());
+    let mut core = assemble_with_mock(&tmp.path().join("data"), Vec::new());
+    core.agent_accounts = test_accounts(tmp.path()).0;
     let client = zeron_rpc::memory_client(core.rpc_service());
 
     // Uploads: chunk → commit → readback over the wire.
@@ -1098,4 +1105,35 @@ exit 0
         account_emails(&snapshot, HarnessId::Cursor),
         vec![("grace@example.com".to_string(), true)]
     );
+}
+
+#[tokio::test]
+async fn legacy_account_migrates_without_plaintext_backup_and_corruption_is_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let (accounts, config) = test_accounts(dir.path());
+    let slots = config.data_dir.join("agent-accounts/codex");
+    std::fs::create_dir_all(&slots).unwrap();
+    let file = slots.join("0123456789abcdef.json");
+    let canary = "legacy-api-key-canary";
+    let legacy = serde_json::json!({"id":"0123456789abcdef","harness":"codex","accountKey":"legacy-account","profile":{"email":"legacy@example.com","authKind":"api-key"},"credentials":{"OPENAI_API_KEY":canary},"savedAt":1});
+    std::fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let snapshot = accounts.list(false).await.unwrap();
+    assert!(snapshot.accounts.iter().any(|a| a.id == "0123456789abcdef"));
+    let sealed = std::fs::read(&file).unwrap();
+    assert!(!String::from_utf8_lossy(&sealed).contains(canary));
+    assert_eq!(
+        std::fs::read_dir(&slots).unwrap().count(),
+        1,
+        "no plaintext backup"
+    );
+    let encrypted: serde_json::Value = serde_json::from_slice(&sealed).unwrap();
+    assert!(encrypted.get("ciphertext").is_some());
+    std::fs::write(&file, b"truncated encrypted snapshot").unwrap();
+    assert!(accounts.list(false).await.is_err());
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        b"truncated encrypted snapshot"
+    );
+    std::fs::write(&file, &sealed).unwrap();
+    assert!(accounts.list(false).await.is_ok());
 }

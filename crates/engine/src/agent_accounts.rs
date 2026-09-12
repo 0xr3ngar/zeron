@@ -242,6 +242,7 @@ struct UsageSnapshot {
 }
 
 struct Inner {
+    protection: crate::vault::store::VaultStore,
     shared: std::sync::OnceLock<crate::shared_credentials::SharedCredentials>,
     config: AgentAccountsConfig,
     http: reqwest::Client,
@@ -264,6 +265,13 @@ pub struct AgentAccounts {
 
 impl AgentAccounts {
     pub fn new(config: AgentAccountsConfig) -> Self {
+        Self::with_protection(config, crate::vault::store::platform_protection())
+    }
+
+    pub fn with_protection(
+        config: AgentAccountsConfig,
+        provider: Box<dyn crate::vault::store::ProtectionKeyProvider>,
+    ) -> Self {
         // Startup sweep: a previous process that crashed mid-login leaves
         // `.login-<uuid>` throwaway CODEX_HOME dirs — each may hold live OAuth
         // tokens — with no owner to clean them. Reclaim them at boot.
@@ -282,6 +290,11 @@ impl AgentAccounts {
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             inner: Arc::new(Inner {
+                protection: crate::vault::store::VaultStore::new(
+                    &root,
+                    format!("native-accounts:{}", root.display()),
+                    provider,
+                ),
                 shared: std::sync::OnceLock::new(),
                 config,
                 http,
@@ -311,7 +324,7 @@ impl AgentAccounts {
     ) -> Result<(), EngineError> {
         use crate::shared_credentials::{Provider, Secret};
         let slot = self
-            .read_slots(harness)
+            .read_slots(harness)?
             .into_iter()
             .find(|s| s.id == account_id)
             .ok_or_else(|| EngineError::Other("That saved account no longer exists.".into()))?;
@@ -392,7 +405,7 @@ impl AgentAccounts {
         let mut accounts: Vec<AgentAccount> = Vec::new();
         for harness in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Cursor] {
             let active_key = active_keys.get(&harness).cloned();
-            let slots = self.read_slots(harness);
+            let slots = self.read_slots(harness)?;
             for slot in &slots {
                 let active = active_key.as_deref() == Some(slot.account_key.as_str());
                 let usage = self.usage_for(harness, slot, active, force_usage).await;
@@ -466,7 +479,7 @@ impl AgentAccounts {
         }
         self.list(false).await?;
         let slot = self
-            .read_slots(harness)
+            .read_slots(harness)?
             .into_iter()
             .find(|s| s.id == account_id)
             .ok_or_else(|| {
@@ -665,7 +678,11 @@ impl AgentAccounts {
             .root_dir()
             .join(format!(".login-{login_id}"));
         std::fs::create_dir_all(&home)?;
-        let mut command = tokio::process::Command::new("codex");
+        let mut command = tokio::process::Command::new(
+            zeron_harness::installations::selected(HarnessId::Codex)
+                .or_else(|| zeron_harness::installations::discovered(HarnessId::Codex))
+                .unwrap_or_else(|| "codex".into()),
+        );
         command
             .arg("login")
             .env("CODEX_HOME", &home)
@@ -1168,69 +1185,90 @@ impl AgentAccounts {
         Ok(dir)
     }
 
-    fn read_slots(&self, harness: HarnessId) -> Vec<Slot> {
-        let Ok(dir) = self.slots_dir(harness) else {
-            return Vec::new();
+    fn read_slot(&self, path: &Path, harness: HarnessId) -> Result<Option<Slot>, EngineError> {
+        let raw = match std::fs::read(path) {
+            Ok(bytes) => zeroize::Zeroizing::new(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
         };
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return Vec::new();
+        let binding = format!(
+            "{}/{}",
+            harness_slug(harness),
+            path.file_name().unwrap_or_default().to_string_lossy()
+        );
+        let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|_| {
+            EngineError::Other(
+                "Account snapshot is unreadable. Its contents have been preserved.".into(),
+            )
+        })?;
+        let plaintext = if value.get("ciphertext").is_some() {
+            self.inner.protection.unprotect(&binding, &raw)?
+        } else {
+            // Read, seal, atomically replace: a failed migration preserves the old
+            // bytes and fails closed. No plaintext backup is created.
+            let encrypted = self.inner.protection.protect(&binding, &raw)?;
+            write_file_atomic(path, &encrypted, true)?;
+            zeron_crypto::SecretBytes::from_slice(&raw)
         };
-        let mut slots: Vec<Slot> = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
+        let slot: Option<Slot> =
+            Some(serde_json::from_slice(plaintext.as_bytes()).map_err(|_| {
+                EngineError::Other(
+                    "Account snapshot is invalid. Its contents have been preserved.".into(),
+                )
+            })?);
+        if slot.as_ref().is_some_and(|s| {
+            s.harness != harness || path.file_stem().and_then(|s| s.to_str()) != Some(s.id.as_str())
+        }) {
+            return Err(EngineError::Other(
+                "Account snapshot identity does not match its storage location.".into(),
+            ));
+        }
+        Ok(slot)
+    }
+
+    fn read_slots(&self, harness: HarnessId) -> Result<Vec<Slot>, EngineError> {
+        let dir = self.slots_dir(harness)?;
+        let mut slots = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            // One malformed slot file must skip THAT slot, not brick the page.
-            if let Some(slot) = std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|raw| serde_json::from_str::<Slot>(&raw).ok())
-            {
+            if let Some(slot) = self.read_slot(&path, harness)? {
                 slots.push(slot);
             }
         }
-        // Creation order — stable across switches (saved_at churns on every
-        // auto-snapshot; created_at never does). Slot id breaks creation-time
-        // ties: two logins saved in the same millisecond otherwise land in
-        // read_dir order, which is filesystem-arbitrary for UUID-named files
-        // and reshuffles the page between restarts (issue #161).
         slots.sort_by(|a, b| {
             (a.created_at.unwrap_or(a.saved_at), &a.id)
                 .cmp(&(b.created_at.unwrap_or(b.saved_at), &b.id))
         });
-        slots
+        Ok(slots)
     }
 
     fn write_slot(&self, slot: &Slot) -> Result<(), EngineError> {
         let file = self
             .slots_dir(slot.harness)?
             .join(format!("{}.json", slot.id));
-        let existing: Option<Slot> = std::fs::read_to_string(&file)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok());
+        let existing = self.read_slot(&file, slot.harness)?;
         let mut full = slot.clone();
+        let floor = self
+            .read_slots(slot.harness)?
+            .iter()
+            .map(|s| s.created_at.unwrap_or(s.saved_at))
+            .max()
+            .map(|v| v.saturating_add(1))
+            .unwrap_or(slot.saved_at);
         full.created_at = existing
-            .and_then(|e| e.created_at.or(Some(e.saved_at)))
+            .and_then(|s| s.created_at.or(Some(s.saved_at)))
             .or(slot.created_at)
-            .or_else(|| {
-                // A brand-new slot: stamp it strictly after every sibling, so
-                // two logins inside the same millisecond still list in the
-                // order they were saved (creation order is the page's sort
-                // key; ms-resolution ties otherwise fall to read_dir order).
-                let floor = self
-                    .read_slots(slot.harness)
-                    .iter()
-                    .map(|s| s.created_at.unwrap_or(s.saved_at))
-                    .max()
-                    .map(|newest| newest + 1)
-                    .unwrap_or(slot.saved_at);
-                Some(floor.max(slot.saved_at))
-            });
-        let json = serde_json::to_string_pretty(&full)
-            .map_err(|e| EngineError::Other(format!("serialize slot: {e}")))?;
-        // Atomic + 0600 from birth: tokens must never be world-readable, and a
-        // crash mid-write must never leave torn JSON.
-        write_file_atomic(&file, json.as_bytes(), true)
+            .or(Some(floor.max(slot.saved_at)));
+        let json = zeroize::Zeroizing::new(
+            serde_json::to_vec(&full)
+                .map_err(|_| EngineError::Other("Cannot encode account snapshot.".into()))?,
+        );
+        let binding = format!("{}/{}.json", harness_slug(slot.harness), slot.id);
+        let encrypted = self.inner.protection.protect(&binding, &json)?;
+        write_file_atomic(&file, &encrypted, true)
     }
 
     // ── remaining usage ─────────────────────────────────────────────────────

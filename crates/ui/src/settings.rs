@@ -20,6 +20,7 @@ pub mod archived;
 pub mod composer;
 pub mod devices;
 pub mod files;
+pub mod harness_management;
 pub mod harnesses;
 pub mod notifications;
 pub mod shared_accounts;

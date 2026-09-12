@@ -176,7 +176,6 @@ pub struct AccountsPage {
     state: Entity<AppState>,
     expanded: std::collections::HashSet<HarnessId>,
     harnesses: Vec<zeron_engine::registry::HarnessDescriptor>,
-    titles: Entity<super::harnesses::TitleSettingsSection>,
     security: Entity<super::shared_accounts::SharedAccountsPanel>,
     key_harness: Option<HarnessId>,
     key_provider: zeron_engine::shared_credentials::Provider,
@@ -280,7 +279,6 @@ impl AccountsPage {
                 this.submit_code(cx);
             }
         });
-        let titles = cx.new(|cx| super::harnesses::TitleSettingsSection::new(state.clone(), cx));
         let security =
             cx.new(|cx| super::shared_accounts::SharedAccountsPanel::new(state.clone(), cx));
         let key_input = cx.new(|cx| ComposerInput::new("API key", cx).with_secret());
@@ -292,7 +290,6 @@ impl AccountsPage {
         });
         let mut page = Self {
             state,
-            titles,
             security,
             key_harness: None,
             key_provider: zeron_engine::shared_credentials::Provider::Anthropic,
@@ -477,34 +474,6 @@ impl AccountsPage {
             viewport,
             card.into_any_element(),
         ))
-    }
-
-    fn toggle_harness(&mut self, harness: HarnessId, enabled: bool, cx: &mut Context<Self>) {
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
-            return;
-        };
-        self.action_task = Some(cx.spawn(async move |this, cx| {
-            let result = engine
-                .client()
-                .call(
-                    methods::SET_HARNESS_ENABLED,
-                    serde_json::json!({"harness": harness, "enabled": enabled}),
-                )
-                .await;
-            this.update(cx, |page, cx| {
-                match result {
-                    Ok(value) => {
-                        if let Ok(list) = serde_json::from_value(value) {
-                            page.harnesses = list;
-                        }
-                        crate::pickers::bump_harness_catalog(cx);
-                    }
-                    Err(error) => page.error = Some(error.to_string().into()),
-                }
-                cx.notify();
-            })
-            .ok();
-        }));
     }
 
     fn load(&mut self, force_usage: bool, cx: &mut Context<Self>) {
@@ -1243,36 +1212,21 @@ impl AccountsPage {
 impl Render for AccountsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::settings::widgets;
-        use zeron_engine::registry::descriptor_enabled;
         let theme = Theme::of(cx).clone();
         let now = Utc::now();
         let dialog = self
             .render_key_dialog(window.viewport_size(), cx)
             .or_else(|| self.render_login_dialog(window.viewport_size(), cx));
         let snapshot = self.snapshot.ready().cloned().unwrap_or_default();
-        let enabled_count = self
-            .harnesses
-            .iter()
-            .filter(|d| descriptor_enabled(d))
-            .count();
         let rows: Vec<AnyElement> = PROVIDERS
             .into_iter()
             .enumerate()
-            .map(|(index, (harness, name, cli))| {
+            .map(|(index, (harness, name, _cli))| {
                 let open = self.expanded.contains(&harness);
                 let accounts = provider_accounts(&snapshot, harness);
-                let descriptor = self.harnesses.iter().find(|d| d.id == harness);
-                let installed = descriptor.is_some_and(|d| d.installed);
-                let enabled = descriptor.is_some_and(descriptor_enabled);
-                let interactive =
-                    (installed || enabled) && !(installed && enabled && enabled_count == 1);
                 let (mark, tint) = crate::pickers::harness_brand_icon(harness);
                 let summary = if accounts.is_empty() {
-                    if installed {
-                        "No accounts connected".to_string()
-                    } else {
-                        "Not installed".to_string()
-                    }
+                    "No accounts connected".to_string()
                 } else {
                     format!(
                         "{} account{}",
@@ -1323,17 +1277,6 @@ impl Render for AccountsPage {
                             ),
                     )
                     .child(
-                        widgets::toggle_switch(&theme, enabled)
-                            .id(("agent-toggle", index))
-                            .when(interactive, |el| {
-                                el.cursor_pointer()
-                                    .on_click(cx.listener(move |page, _, _, cx| {
-                                        cx.stop_propagation();
-                                        page.toggle_harness(harness, !enabled, cx);
-                                    }))
-                            }),
-                    )
-                    .child(
                         crate::icons::icon(if open {
                             crate::icons::ALT_ARROW_DOWN
                         } else {
@@ -1365,11 +1308,9 @@ impl Render for AccountsPage {
                                 .py(px(16.0))
                                 .text_size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.text_muted)
-                                .child(if installed {
-                                    format!("Connect an account to get started with {name}.")
-                                } else {
-                                    format!("Install {cli} to run {name} on this device.")
-                                }),
+                                .child(format!(
+                                    "Connect an account to use {name} across your devices."
+                                )),
                         );
                     }
                     for warning in snapshot.warnings.iter().filter(|w| w.harness == harness) {
@@ -1397,7 +1338,7 @@ impl Render for AccountsPage {
                                     .child(
                                         crate::icons::icon(crate::icons::ADD_CIRCLE).size(px(14.0)),
                                     )
-                                    .child("Connect account"),
+                                    .child("Add API key"),
                             )
                             .when(
                                 matches!(
@@ -1411,7 +1352,7 @@ impl Render for AccountsPage {
                                             .on_click(cx.listener(move |page, _, _, cx| {
                                                 page.start_login(harness, cx)
                                             }))
-                                            .child("Sign in on this device"),
+                                            .child("Connect account"),
                                     )
                                 },
                             ),
@@ -1432,7 +1373,7 @@ impl Render for AccountsPage {
                             .flex()
                             .items_center()
                             .gap(px(10.0))
-                            .child(widgets::page_header(&theme, "Agents", None))
+                            .child(widgets::page_header(&theme, "Accounts", None))
                             .child(div().flex_1())
                             .child(
                                 widgets::ghost_action(&theme)
@@ -1444,7 +1385,7 @@ impl Render for AccountsPage {
                     )
                     .child(widgets::page_subtitle(
                         &theme,
-                        "Your agents, connected accounts, and usage.",
+                        "Manage your accounts, usage, and encrypted device access.",
                     ))
                     .when_some(self.error.clone(), |el, message| {
                         el.child(widgets::error_strip(&theme, message))
@@ -1457,8 +1398,7 @@ impl Render for AccountsPage {
                         |el, e| el.child(widgets::error_strip(&theme, e)),
                     )
                     .child(div().mt(px(24.0)).child(self.security.clone()))
-                    .child(div().mt(px(16.0)).children(rows))
-                    .child(self.titles.clone()),
+                    .child(div().mt(px(16.0)).children(rows)),
             )
             .when_some(dialog, |el, dialog| el.child(dialog))
     }

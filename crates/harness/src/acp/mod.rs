@@ -633,6 +633,11 @@ impl AcpHarness {
         if let Some(p) = &self.executable {
             return Ok(Launch::Program(p.clone(), spec_args));
         }
+        if self.spec.id != HarnessId::Pi
+            && let Some(p) = crate::installations::selected(self.spec.id)
+        {
+            return Ok(Launch::Program(p, spec_args));
+        }
         if let Some(p) = std::env::var_os(self.spec.env_override)
             && !p.is_empty()
         {
@@ -722,6 +727,14 @@ impl AcpHarness {
         cmd.args(args);
         cmd.args(extra_args);
         crate::compose_child_path(&mut cmd, &exe);
+        if self.spec.id == HarnessId::Pi
+            && let Some(pi) = crate::installations::selected(HarnessId::Pi)
+        {
+            if !pi.is_file() {
+                return Err(HarnessError::NotInstalled(pi.display().to_string()));
+            }
+            crate::compose_path(&mut cmd, pi.parent().into_iter().chain(exe.parent()));
+        }
         if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
             cmd.current_dir(cwd);
         }
@@ -1146,6 +1159,9 @@ impl Harness for AcpHarness {
     fn installed(&self) -> bool {
         if self.executable.is_some() {
             return true;
+        }
+        if let Some(p) = crate::installations::selected(self.spec.id) {
+            return p.is_file();
         }
         if std::env::var_os(self.spec.env_override).is_some_and(|v| !v.is_empty()) {
             return true;

@@ -234,6 +234,69 @@ impl VaultStore {
         self.path.try_exists().unwrap_or(true)
     }
 
+    /// Encrypt an account snapshot with an object-specific binding. This does
+    /// not depend on cloud enrollment and never stores a plaintext fallback.
+    pub fn protect(&self, binding: &str, plaintext: &[u8]) -> Result<Vec<u8>, VaultStoreError> {
+        if plaintext.len() > MAX_STATE_BYTES {
+            return Err(VaultStoreError::Corrupt(
+                "account snapshot too large".into(),
+            ));
+        }
+        let key = self.protection_key()?;
+        let mut nonce = [0u8; 12];
+        zeron_crypto::fill_random(&mut nonce)?;
+        let aad = [
+            self.aad(),
+            b"\0account-snapshot\0".to_vec(),
+            binding.as_bytes().to_vec(),
+        ]
+        .concat();
+        let ciphertext = zeron_crypto::seal_aes256_gcm(key.as_bytes(), &nonce, &aad, plaintext)?;
+        serde_json::to_vec(&StateFile {
+            version: FILE_VERSION,
+            protection: self.provider.mode(),
+            nonce: Hex::of(&nonce),
+            ciphertext: Hex::of(&ciphertext),
+        })
+        .map_err(|_| VaultStoreError::Corrupt("cannot encode encrypted account".into()))
+    }
+    pub fn unprotect(&self, binding: &str, bytes: &[u8]) -> Result<SecretBytes, VaultStoreError> {
+        if bytes.len() > MAX_STATE_BYTES * 3 {
+            return Err(VaultStoreError::Corrupt(
+                "encrypted account too large".into(),
+            ));
+        }
+        let file: StateFile = serde_json::from_slice(bytes)
+            .map_err(|_| VaultStoreError::Corrupt("invalid encrypted account".into()))?;
+        if file.version != FILE_VERSION {
+            return Err(VaultStoreError::Corrupt(
+                "unsupported encrypted account".into(),
+            ));
+        }
+        let key = self.protection_key()?;
+        let nonce: [u8; 12] = file
+            .nonce
+            .decode()
+            .ok_or_else(|| VaultStoreError::Corrupt("invalid account nonce".into()))?;
+        let ciphertext = file
+            .ciphertext
+            .bytes()
+            .ok_or_else(|| VaultStoreError::Corrupt("invalid account ciphertext".into()))?;
+        let aad = [
+            self.aad(),
+            b"\0account-snapshot\0".to_vec(),
+            binding.as_bytes().to_vec(),
+        ]
+        .concat();
+        zeron_crypto::open_aes256_gcm(key.as_bytes(), &nonce, &aad, &ciphertext, MAX_STATE_BYTES)
+            .map_err(|_| {
+                VaultStoreError::Locked(
+                    "Account storage could not be decrypted. Unlock your OS credential store."
+                        .into(),
+                )
+            })
+    }
+
     fn protection_key(&self) -> Result<SecretBytes, VaultStoreError> {
         let mut slot = self
             .protection_key
@@ -602,6 +665,62 @@ mod tests {
         assert_eq!(
             format!("{:?}", state.device.as_ref().unwrap().signing_seed),
             "[REDACTED]"
+        );
+    }
+
+    #[test]
+    fn account_ciphertext_is_bound_to_profile_and_slot_and_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("key");
+        write_private(&key, &[27; 32]).unwrap();
+        let open = |profile: &str| {
+            VaultStore::new(
+                dir.path(),
+                profile,
+                Box::new(KeyFileProtection::new(key.clone(), ProtectionMode::KeyFile)),
+            )
+        };
+        let original = open("org/user");
+        let plaintext = b"unique-account-secret-canary";
+        let encrypted = original.protect("codex/account.json", plaintext).unwrap();
+        assert!(!encrypted.windows(plaintext.len()).any(|w| w == plaintext));
+        assert_ne!(
+            encrypted,
+            original.protect("codex/account.json", plaintext).unwrap()
+        );
+        assert_eq!(
+            open("org/user")
+                .unprotect("codex/account.json", &encrypted)
+                .unwrap()
+                .as_bytes(),
+            plaintext
+        );
+        assert!(
+            original
+                .unprotect("claude/account.json", &encrypted)
+                .is_err()
+        );
+        assert!(original.unprotect("codex/other.json", &encrypted).is_err());
+        assert!(
+            open("org/other")
+                .unprotect("codex/account.json", &encrypted)
+                .is_err()
+        );
+        let mut corrupt: serde_json::Value = serde_json::from_slice(&encrypted).unwrap();
+        let mut ciphertext = corrupt["ciphertext"].as_str().unwrap().to_string();
+        ciphertext.replace_range(0..2, if &ciphertext[..2] == "00" { "ff" } else { "00" });
+        corrupt["ciphertext"] = ciphertext.into();
+        assert!(
+            original
+                .unprotect("codex/account.json", &serde_json::to_vec(&corrupt).unwrap())
+                .is_err()
+        );
+        assert_eq!(
+            original
+                .unprotect("codex/account.json", &encrypted)
+                .unwrap()
+                .as_bytes(),
+            plaintext
         );
     }
 

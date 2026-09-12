@@ -925,6 +925,8 @@ fn forwardable(method: &str) -> bool {
     matches!(
         method,
         methods::LIST_HARNESSES
+            | methods::LIST_HARNESS_INSTALLATIONS
+            | methods::MANAGE_HARNESS_INSTALLATION
             | methods::GET_TITLE_SETTINGS
             | methods::SET_TITLE_SETTINGS
             | methods::SET_HARNESS_ENABLED
@@ -1198,6 +1200,25 @@ impl RpcService for EngineRpc {
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
+            methods::LIST_HARNESS_INSTALLATIONS => RpcReply::value(&serde_json::json!({
+                "harnesses": self.registry.descriptors(),
+                "installations": zeron_harness::installations::list().await,
+            })),
+            methods::MANAGE_HARNESS_INSTALLATION => {
+                #[derive(Deserialize)]
+                struct Params {
+                    harness: HarnessId,
+                    #[serde(flatten)]
+                    action: zeron_harness::installations::InstallAction,
+                }
+                let p: Params = parse_params(params)?;
+                let registry = self.registry.clone();
+                zeron_harness::installations::start(p.harness, p.action, move || {
+                    registry.invalidate_runtime(p.harness)
+                })
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"accepted": true}))
+            }
             methods::GET_TITLE_SETTINGS => RpcReply::value(&self.registry.title_settings()),
             methods::SET_TITLE_SETTINGS => {
                 let p: crate::registry::TitleSettings = parse_params(params)?;

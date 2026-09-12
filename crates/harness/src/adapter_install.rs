@@ -109,11 +109,11 @@ pub(crate) fn find_npm() -> Option<PathBuf> {
 /// shebang or not) run via `node`; a native binary published as a bin entry
 /// runs directly.
 pub(crate) fn launch_for_entry(entry: &Path) -> Result<(PathBuf, Vec<String>), HarnessError> {
-    let head = std::fs::read(entry)
-        .ok()
-        .map(|b| b.into_iter().take(4).collect::<Vec<u8>>())
-        .unwrap_or_default();
-    let native = head.starts_with(b"\x7fELF")
+    use std::io::Read;
+    let mut head = [0; 4];
+    let _ = std::fs::File::open(entry).and_then(|mut file| file.read_exact(&mut head));
+    let native = head.starts_with(b"MZ")
+        || head.starts_with(b"\x7fELF")
         || head.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
         || head.starts_with(&[0xca, 0xfe, 0xba, 0xbe]);
     if native {

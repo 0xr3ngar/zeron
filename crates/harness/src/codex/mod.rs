@@ -72,6 +72,9 @@ use normalize::{
 /// then known install locations as a last resort. Resolved per call — cheap
 /// after the snapshot is cached.
 fn resolve_codex_executable() -> Option<PathBuf> {
+    if let Some(path) = crate::installations::selected(HarnessId::Codex) {
+        return Some(path);
+    }
     if let Some(p) = std::env::var_os("CODEX_EXECUTABLE")
         && !p.is_empty()
     {
@@ -542,7 +545,7 @@ impl Harness for CodexHarness {
         REASONING_LEVELS
     }
     fn installed(&self) -> bool {
-        self.executable.is_some() || resolve_codex_executable().is_some()
+        self.executable.is_some() || resolve_codex_executable().is_some_and(|p| p.is_file())
     }
     /// Done is the CLI's own terminal frame, for wake turns too.
     fn deterministic_turn_end(&self) -> bool {

@@ -74,6 +74,8 @@ struct FixtureState {
     pending: Vec<serde_json::Value>,
     fail_next_key: bool,
     calls: Vec<String>,
+    installing: bool,
+    install_failed: bool,
 }
 impl FixtureState {
     fn new() -> Self {
@@ -88,6 +90,8 @@ impl FixtureState {
             pending: vec![],
             fail_next_key: false,
             calls: vec![],
+            installing: false,
+            install_failed: false,
         }
     }
     fn handle(
@@ -97,6 +101,18 @@ impl FixtureState {
     ) -> Option<Result<RpcReply, RpcError>> {
         self.calls.push(method.into());
         let value = match method {
+            methods::LIST_HARNESS_INSTALLATIONS => {
+                let mut rows = zeron_engine::default_registry().descriptors();
+                rows.retain(|r| r.id != HarnessId::Mock);
+                let remote = params["targetDeviceId"] == "fixture-linux";
+                let installations: Vec<_> = rows.iter_mut().map(|r| {
+                    let installed = !remote || r.id == HarnessId::ClaudeCode;
+                    r.installed = installed; r.enabled = Some(installed);
+                    let version = match r.id { HarnessId::Codex=>"0.153.3", HarnessId::ClaudeCode=>"2.1.258", HarnessId::Grok=>"1.0.4", HarnessId::Opencode=>"1.18.21", _=>"1.0.0" };
+                    serde_json::json!({"harness":r.id,"installed":installed,"version":if installed {Some(version)} else {None},"managed":!remote,"executable":format!("/home/avery/.zeron/harnesses/{}/{}",zeron_harness::installations::name(r.id),version),"recommendedVersion":version,"previousVersion":if installed {Some("0.152.0")} else {None},"canInstall":true,"installing":remote && r.id==HarnessId::Codex && self.installing,"error":if remote && r.id==HarnessId::Codex && self.install_failed {Some("Download interrupted. Your previous installation is still selected. Try again when this device is online.")} else {None}})
+                }).collect();
+                serde_json::json!({"harnesses":rows,"installations":installations})
+            }
             methods::LIST_AGENT_ACCOUNTS => {
                 let mut snapshot = self.accounts.clone();
                 if self.status["phase"] != "ready" {
@@ -350,6 +366,33 @@ fn main() -> anyhow::Result<()> {
                         "fixture engine did not attach"
                     );
                     pause(cx, 500).await;
+                    state.update(cx, |s,cx| {
+                        let local = s.local_device_id.clone().unwrap();
+                        s.devices = vec![
+                            serde_json::from_value(serde_json::json!({"id":local,"name":"Avery’s MacBook Pro","platform":"darwin","lastSeenAt":chrono::Utc::now()})).unwrap(),
+                            serde_json::from_value(serde_json::json!({"id":"fixture-linux","name":"Linux workstation","platform":"linux","lastSeenAt":chrono::Utc::now()})).unwrap(),
+                            serde_json::from_value(serde_json::json!({"id":"fixture-offline","name":"Home desktop","platform":"linux","lastSeenAt":null})).unwrap(),
+                        ]; cx.notify();
+                    });
+                    window.update(cx, |shell,_,cx| shell.fixture_open_harnesses(cx))?;
+                    pause(cx, 1200).await;
+                    capture(&output, "harnesses-devices-dark")?;
+                    window.update(cx, |shell,_,cx| shell.fixture_harness(HarnessId::Codex, state.read(cx).local_device_id.clone(), cx))?;
+                    pause(cx, 600).await;
+                    capture(&output, "harnesses-manage-dark")?;
+                    cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Light,cx));
+                    pause(cx, 400).await;
+                    capture(&output, "harnesses-manage-light")?;
+                    cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Dark,cx));
+                    fixture.lock().unwrap().installing = true;
+                    window.update(cx, |shell,_,cx| shell.fixture_open_harnesses(cx))?;
+                    pause(cx, 600).await;
+                    capture(&output, "harnesses-installing")?;
+                    fixture.lock().unwrap().installing = false;
+                    fixture.lock().unwrap().install_failed = true;
+                    window.update(cx, |shell,_,cx| shell.fixture_harness(HarnessId::Codex,None,cx))?;
+                    pause(cx, 600).await;
+                    capture(&output, "harnesses-install-error")?;
                     window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
                     pause(cx, 1600).await;
                     capture(&output, "agents-overview-dark")?;
@@ -367,7 +410,7 @@ fn main() -> anyhow::Result<()> {
                     fixture.lock().unwrap().status = serde_json::json!({"phase":"notEnrolled","remoteVault":false,"protection":"keychain"});
                     window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
                     capture_step(window, cx, &output, None, "flow-01-set-up-encryption").await?;
-                    capture_step(window, cx, &output, Some("security-setup"), "flow-02-save-recovery-kit").await?;
+                    capture_step(window, cx, &output, None, "flow-02-save-recovery-kit").await?;
                     capture_step(window, cx, &output, Some("security-confirm"), "flow-03-encryption-ready").await?;
 
                     fixture.lock().unwrap().accounts = FixtureState::new().accounts;

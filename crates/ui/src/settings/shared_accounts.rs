@@ -1,4 +1,4 @@
-//! Settings → Agents (RFC 0001 §4): the per-profile vault's explicit
+//! Settings → Accounts (RFC 0001 §4): the per-profile vault's explicit
 //! states and the four actions a person can take — set up a vault (and save
 //! the recovery kit), approve this device from another one, approve other
 //! devices by comparing their code, and remove a device (rotating keys).
@@ -65,10 +65,10 @@ pub fn phase_copy(status: &Value) -> (&'static str, String) {
             if status.get("remoteVault").and_then(Value::as_bool) == Some(true) {
                 ("Approve this device", "This account already has an encrypted vault. Approve this device from another device, or use your recovery key.".into())
             } else {
-                ("Not set up", "Set up end-to-end encryption to share agent accounts across your devices.".into())
+                ("Preparing account protection", "Accounts are always encrypted. Save your recovery key to finish connecting this device.".into())
             }
         }
-        "pending" => ("Waiting for approval", "Open Settings → Agents on an approved device and compare the code below before approving.".into()),
+        "pending" => ("Waiting for approval", "Open Settings → Accounts on an approved device and compare the code below before approving.".into()),
         "locked" => ("Unlock this device", format!("Secure key storage is unavailable: {reason}")),
         "recoveryConfirmationRequired" => ("Save recovery kit", "Save the recovery key and file, then confirm. Encrypted writes remain paused until confirmation.".into()),
         "keyUpdateRequired" => ("Waiting for encryption keys", "A vault update or key delivery is pending. This page checks automatically.".into()),
@@ -173,10 +173,33 @@ impl SharedAccountsPanel {
             self.status = Loadable::Loading;
         }
         self.load_task = Some(cx.spawn(async move |this, cx| {
-            let status = engine
+            let mut status = engine
                 .client()
                 .call(methods::VAULT_REFRESH, serde_json::json!({}))
                 .await;
+            // Encryption is mandatory. Only a genuinely new vault is created
+            // automatically; an existing vault still requires device approval.
+            let initialize = status.as_ref().ok().is_some_and(|s| {
+                s.get("phase").and_then(Value::as_str) == Some("notEnrolled")
+                    && s.get("remoteVault").and_then(Value::as_bool) == Some(false)
+            });
+            let mut recovery = None;
+            if initialize {
+                match engine
+                    .client()
+                    .call(methods::VAULT_SETUP, serde_json::json!({}))
+                    .await
+                {
+                    Ok(value) => {
+                        recovery = Some(value);
+                        status = engine
+                            .client()
+                            .call(methods::VAULT_REFRESH, serde_json::json!({}))
+                            .await;
+                    }
+                    Err(err) => status = Err(err),
+                }
+            }
             let ready = status
                 .as_ref()
                 .ok()
@@ -195,6 +218,21 @@ impl SharedAccountsPanel {
             };
             this.update(cx, |page, cx| {
                 page.load_task = None;
+                if let Some(value) = recovery {
+                    page.kit = Some((
+                        value
+                            .get("kit")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        value
+                            .get("recoveryFile")
+                            .map(|f| serde_json::to_string_pretty(f).unwrap_or_default())
+                            .unwrap_or_default(),
+                    ));
+                    page.kit_copied = false;
+                    page.expanded = true;
+                }
                 page.status = match status {
                     Ok(value) => Loadable::Ready(value),
                     Err(err) => Loadable::Error(err.to_string()),
@@ -537,7 +575,7 @@ impl SharedAccountsPanel {
                     actions.push(self.action_button(
                         theme,
                         "vault-setup",
-                        "Set up encryption",
+                        "Continue setup",
                         true,
                         cx,
                         |this, cx| this.setup(cx),
@@ -966,7 +1004,7 @@ impl Render for SharedAccountsPanel {
                 .child(
                     div()
                         .flex_1()
-                        .child(widgets::row_title(&theme, "Account sync"))
+                        .child(widgets::row_title(&theme, "Device access"))
                         .child(
                             div()
                                 .mt(px(3.0))
@@ -1051,7 +1089,7 @@ mod tests {
     #[test]
     fn phase_copy_never_promises_encryption_before_ready() {
         let not_enrolled = serde_json::json!({ "phase": "notEnrolled", "remoteVault": false });
-        assert_eq!(phase_copy(&not_enrolled).0, "Not set up");
+        assert_eq!(phase_copy(&not_enrolled).0, "Preparing account protection");
         let existing = serde_json::json!({ "phase": "notEnrolled", "remoteVault": true });
         assert_eq!(phase_copy(&existing).0, "Approve this device");
         let locked = serde_json::json!({ "phase": "locked", "reason": "no keychain" });

@@ -116,6 +116,7 @@ enum Slot {
         /// shows up on the next settings/picker open, no restart needed.
         installed: InstalledProbe,
         factory: Factory,
+        cached: Option<Arc<dyn Harness>>,
     },
 }
 
@@ -313,6 +314,7 @@ impl HarnessRegistry {
                     descriptor,
                     installed,
                     factory,
+                    cached: None,
                 },
             )
             .is_none()
@@ -356,14 +358,27 @@ impl HarnessRegistry {
 
     fn resolve_native(&self, id: HarnessId) -> Result<Arc<dyn Harness>, HarnessError> {
         let mut slots = self.slots();
-        match slots.get(&id) {
+        match slots.get_mut(&id) {
             Some(Slot::Ready(harness)) => Ok(harness.clone()),
-            Some(Slot::Lazy { factory, .. }) => {
+            Some(Slot::Lazy {
+                factory, cached, ..
+            }) => {
+                if let Some(harness) = cached {
+                    return Ok(harness.clone());
+                }
                 let harness = factory()?;
-                slots.insert(id, Slot::Ready(harness.clone()));
+                *cached = Some(harness.clone());
                 Ok(harness)
             }
             None => Err(HarnessError::NotInstalled(format!("{id:?}"))),
+        }
+    }
+
+    /// New sessions use a fresh driver after a runtime switch. Existing sessions
+    /// retain their Arc and executable, including long-lived OpenCode servers.
+    pub fn invalidate_runtime(&self, id: HarnessId) {
+        if let Some(Slot::Lazy { cached, .. }) = self.slots().get_mut(&id) {
+            *cached = None;
         }
     }
 

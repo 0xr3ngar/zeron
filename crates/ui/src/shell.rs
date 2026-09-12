@@ -394,9 +394,10 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 7] = [
+    pub const ALL: [SettingsSection; 8] = [
         SettingsSection::Devices,
         SettingsSection::Harnesses,
+        SettingsSection::Agents,
         SettingsSection::Appearance,
         SettingsSection::Files,
         SettingsSection::Notifications,
@@ -409,8 +410,8 @@ impl SettingsSection {
     pub fn label(self) -> &'static str {
         match self {
             SettingsSection::Devices => "Devices",
-            SettingsSection::Harnesses => "Agents",
-            SettingsSection::Agents => "Agents",
+            SettingsSection::Harnesses => "Harnesses",
+            SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
             SettingsSection::Notifications => "Notifications",
@@ -1245,6 +1246,7 @@ pub struct Shell {
     notifications_page: Option<Entity<NotificationsPage>>,
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
+    harnesses_page: Option<Entity<crate::settings::harness_management::HarnessesPage>>,
     shortcuts_sub: Option<Subscription>,
     notifications_sub: Option<Subscription>,
     files_settings_sub: Option<Subscription>,
@@ -1585,6 +1587,7 @@ impl Shell {
             notifications_page: None,
             shortcuts_page: None,
             accounts_page: None,
+            harnesses_page: None,
             shortcuts_sub: None,
             notifications_sub: None,
             files_settings_sub: None,
@@ -3175,6 +3178,7 @@ impl Shell {
             SettingsSection::Harnesses | SettingsSection::Agents
         ) {
             self.accounts_page = None;
+            self.harnesses_page = None;
         }
         self.route = Route::Settings(section);
         self.nav.push(NavEntry::Settings(section));
@@ -3244,7 +3248,20 @@ impl Shell {
                     None => Empty.into_any_element(),
                 }
             }
-            SettingsSection::Harnesses | SettingsSection::Agents => {
+            SettingsSection::Harnesses => {
+                if self.harnesses_page.is_none() {
+                    let state = self.state.clone();
+                    self.harnesses_page = Some(cx.new(|cx| {
+                        crate::settings::harness_management::HarnessesPage::new(state, cx)
+                    }));
+                }
+                self.harnesses_page
+                    .as_ref()
+                    .unwrap()
+                    .clone()
+                    .into_any_element()
+            }
+            SettingsSection::Agents => {
                 if self.accounts_page.is_none() {
                     let state = self.state.clone();
                     self.accounts_page = Some(cx.new(|cx| AccountsPage::new(state, cx)));
@@ -10501,8 +10518,27 @@ mod exit_regressions {
 /// Native browser regression fixture hooks are excluded from shipped builds.
 #[cfg(feature = "browser-fixture")]
 impl Shell {
-    pub fn fixture_open_agents(&mut self, cx: &mut Context<Self>) {
+    pub fn fixture_open_harnesses(&mut self, cx: &mut Context<Self>) {
         self.open_settings(SettingsSection::Harnesses, cx);
+    }
+    pub fn fixture_harness(
+        &mut self,
+        h: zeron_proto::HarnessId,
+        device: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(page) = &self.harnesses_page {
+            page.update(cx, |page, cx| {
+                page.fixture_expand(h, cx);
+                if let Some(d) = device {
+                    page.fixture_manage(h, d, cx);
+                }
+                page.fixture_refresh(cx);
+            });
+        }
+    }
+    pub fn fixture_open_agents(&mut self, cx: &mut Context<Self>) {
+        self.open_settings(SettingsSection::Agents, cx);
     }
     pub fn fixture_expand_agent(
         &mut self,
