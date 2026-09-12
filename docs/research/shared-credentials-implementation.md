@@ -1,5 +1,12 @@
 # Shared agent credentials
 
+**Incomplete against the product requirement:** connecting a provider once must let
+authorized devices and newly provisioned cloud agents run without another interactive
+provider login, including after the original device goes offline. The API-key implementation
+below is groundwork, not completion of that requirement. Subscription authentication,
+durable refresh ownership, and unattended worker authorization remain unimplemented.
+See [the required cloud authentication flow](cloud-agent-auth-requirements.md).
+
 The Agents settings page combines installation toggles, connected accounts, and available
 usage meters. Each agent expands independently; account sync has its own compact management
 panel. There is no device switcher. Shared accounts are visible on approved devices in the

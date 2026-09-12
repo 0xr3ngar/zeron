@@ -1,5 +1,11 @@
 # Cross-device provider access
 
+**Scope clarification:** the API-key-first rollout proposed below does not satisfy the
+required product outcome. Authorized new cloud workers must authenticate without repeating
+provider login, including when the original device is offline. See
+[cloud authentication requirements](cloud-agent-auth-requirements.md) for the updated
+completion criteria, durable refresh ownership, and unresolved provider integration gates.
+
 Investigated 2026-09-12 against `origin/main` at `7655c662` (v0.2.61).
 Status: proposal; no authentication behavior has been changed or live credentials transferred.
 
