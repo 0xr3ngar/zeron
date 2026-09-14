@@ -924,7 +924,7 @@ impl Theme {
             ))
     }
 
-    /// Match the right pane over the transcript canvas while retaining blur.
+    /// Move toward the right pane tone while keeping the backdrop visible.
     /// Solve the overlay in RGB: target = tint * alpha + canvas * (1 - alpha).
     pub fn composer_sidebar_tint(&self) -> Hsla {
         let target = if self.is_glass() {
@@ -949,7 +949,8 @@ impl Theme {
             ((target[i] - canvas[i] * (1.0 - alpha)) / alpha).clamp(0.0, 1.0)
         });
         let (h, s, l) = rgb_to_hsl(rgb[0], rgb[1], rgb[2]);
-        hsla(h, s, l, alpha)
+        // Use the compensated hue, but leave 85% of the blurred backdrop visible.
+        hsla(h, s, l, 0.15)
     }
 
     /// Shared fill for the composer, queue tray, and input panels. Without
@@ -2653,7 +2654,7 @@ mod tests {
     }
 
     #[test]
-    fn composer_tint_composites_to_right_pane_tone() {
+    fn composer_tint_moves_toward_sidebar_without_hiding_backdrop() {
         for mut theme in [Theme::dark(), Theme::light()] {
             for (canvas, shell) in [
                 (theme.bg, theme.surface),
@@ -2669,13 +2670,15 @@ mod tests {
                     theme.bg
                 };
                 let actual = flatten(tint, flatten(theme.glass(), theme.bg));
-                for (a, b) in hsl_to_rgb(actual.h, actual.s, actual.l)
-                    .into_iter()
-                    .zip(hsl_to_rgb(expected.h, expected.s, expected.l))
-                {
-                    assert!((a - b).abs() < 0.0001);
+                let base = flatten(theme.glass(), theme.bg);
+                let base_rgb = hsl_to_rgb(base.h, base.s, base.l);
+                let target_rgb = hsl_to_rgb(expected.h, expected.s, expected.l);
+                let actual_rgb = hsl_to_rgb(actual.h, actual.s, actual.l);
+                for i in 0..3 {
+                    assert!(actual_rgb[i] >= base_rgb[i].min(target_rgb[i]) - 0.0001);
+                    assert!(actual_rgb[i] <= base_rgb[i].max(target_rgb[i]) + 0.0001);
                 }
-                assert!((0.60..=1.0).contains(&tint.a));
+                assert_eq!(tint.a, 0.15);
             }
         }
     }
