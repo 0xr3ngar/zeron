@@ -39,9 +39,10 @@ fn mask(bounds: Bounds<Pixels>, composer: Bounds<Pixels>, cutout: bool) -> Image
             px(1.0)
         },
         clearance: if cutout { px(8.0) } else { px(0.0) },
-        // Use most of the taller hero for the smoothstep ramp, so the image
-        // settles into the canvas without a short, visibly dark band.
-        bottom_fade: Some((bounds.bottom(), px((height * 0.60).max(1.0)))),
+        // Start fading at the image's top, rather than holding full opacity
+        // through its first 40% and compressing the transition near the bottom.
+        // Both passes use the full height, independently of the softer cutout.
+        bottom_fade: Some((bounds.bottom(), px(height.max(1.0)))),
     }
 }
 
@@ -189,7 +190,7 @@ mod tests {
                 );
                 let mask = mask(hero, composer, true);
                 assert_eq!(mask.bounds, composer);
-                assert_eq!(mask.bottom_fade, Some((px(480.0), px(264.0))));
+                assert_eq!(mask.bottom_fade, Some((px(480.0), px(440.0))));
                 assert_eq!(mask.feather, px(440.0 * 0.52));
                 assert_eq!(mask.clearance, px(8.0));
             }
@@ -217,5 +218,18 @@ mod tests {
         assert_eq!(reveal.radius, px(0.0));
         assert_eq!(reveal.clearance, px(0.0));
         assert_eq!(CUTOUT_REVEAL_OPACITY, 0.5);
+    }
+
+    #[test]
+    fn new_thread_main_fade_uses_the_full_height_at_every_window_size() {
+        for height in [288.0, 489.6, 691.2, 760.0] {
+            let hero = Bounds::new(point(px(224.25), px(40.5)), size(px(1000.0), px(height)));
+            let composer = Bounds::new(point(px(352.0), px(406.0)), size(px(736.0), px(124.0)));
+            for cutout in [false, true] {
+                let (end, feather) = mask(hero, composer, cutout).bottom_fade.unwrap();
+                assert!((f32::from(end - feather - hero.top())).abs() < 0.0001);
+                assert_eq!(end, hero.bottom());
+            }
+        }
     }
 }
