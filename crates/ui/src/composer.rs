@@ -7690,6 +7690,16 @@ impl Render for Composer {
         let appshot_strip = self.render_appshot_strip(&theme, window, cx);
         let comments_chip = self.render_comments_chip(&theme, cx);
 
+        // A translucent cool silver/slate edge sits more naturally on frost
+        // than the general-purpose white/black separator color.
+        let pill_border = if theme.is_frost() {
+            match theme.appearance {
+                crate::theme::Appearance::Dark => gpui::hsla(210.0 / 360.0, 0.18, 0.78, 0.16),
+                crate::theme::Appearance::Light => gpui::hsla(210.0 / 360.0, 0.18, 0.32, 0.18),
+            }
+        } else {
+            theme.border
+        };
         // Let the backdrop blur supply the glass surface without a color wash.
         // Keep the opaque fallback when frost is disabled or unsupported.
         let pill = div()
@@ -7705,7 +7715,7 @@ impl Render for Composer {
             )
             .rounded(px(surface_radius))
             .border_1()
-            .border_color(theme.border)
+            .border_color(pill_border)
             .when(!theme.is_frost(), |el| {
                 el.bg(theme.input_glass_bg()).shadow_lg()
             });
