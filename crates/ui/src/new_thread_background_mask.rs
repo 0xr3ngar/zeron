@@ -1,23 +1,60 @@
-//! A continuous paint-time source-alpha fade. Resizing changes only GPU
-//! parameters, never the image pixels or atlas entry.
+//! Paint-time source-alpha feather. Resizing changes only GPU parameters, not
+//! the image identity, pixels, atlas entry, or an asynchronous raster job.
 use gpui::{Bounds, ImageAlphaMask, Pixels, RenderImage, Window, point, px, size};
-use std::sync::Arc;
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
-fn mask(bounds: Bounds<Pixels>) -> ImageAlphaMask {
+// Reveal half-strength artwork through the cutout's darkest area. The main
+// masked pass preserves its contour, while this underlay softens its contrast.
+pub(crate) const CUTOUT_REVEAL_OPACITY: f32 = 0.5;
+
+pub(crate) type SurfaceBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
+
+fn mask(bounds: Bounds<Pixels>, composer: Bounds<Pixels>, cutout: bool) -> ImageAlphaMask {
+    let height = f32::from(bounds.size.height);
+    // Keep the cleared area open through the hero's bottom. A taller image
+    // must not fade back in beneath the composer's rounded lower edge.
+    let cleared = Bounds::new(
+        composer.origin,
+        size(
+            composer.size.width,
+            composer.bottom().max(bounds.bottom()) - composer.top(),
+        ),
+    );
     ImageAlphaMask {
-        // Place the exclusion entirely below the artwork, spanning its width.
-        // The shader's distance is then purely vertical: one smoothstep from
-        // full alpha at the top to zero at the bottom. A composer-shaped
-        // exclusion creates a much steeper, visible contour around the input.
-        bounds: Bounds::new(point(bounds.left(), bounds.bottom()), bounds.size),
-        radius: px(0.0),
-        feather: bounds.size.height.max(px(1.0)),
-        clearance: px(0.0),
-        bottom_fade: None,
+        // The reveal pass has only the shared bottom fade. Its exclusion sits
+        // below the image, so it fills the cutout without changing its shape.
+        bounds: if cutout {
+            cleared
+        } else {
+            Bounds::new(point(bounds.left(), bounds.bottom() + px(1.0)), bounds.size)
+        },
+        radius: if cutout {
+            px(crate::composer::COMPOSER_RADIUS)
+        } else {
+            px(0.0)
+        },
+        feather: if cutout {
+            px((height * 0.52).clamp(120.0, 280.0))
+        } else {
+            px(1.0)
+        },
+        clearance: if cutout { px(8.0) } else { px(0.0) },
+        // Use most of the taller hero for the smoothstep ramp, so the image
+        // settles into the canvas without a short, visibly dark band.
+        bottom_fade: Some((bounds.bottom(), px((height * 0.60).max(1.0)))),
     }
 }
 
-pub(crate) fn paint(source: Arc<RenderImage>, bounds: Bounds<Pixels>, window: &mut Window) {
+/// All elements have finished prepaint before this reads the measured surface,
+/// so the first visible frame uses the current composer, including on sidebar
+/// resize and right-panel handoffs. Object-fit cropping is independent.
+pub(crate) fn paint(
+    source: Arc<RenderImage>,
+    bounds: Bounds<Pixels>,
+    composer: Bounds<Pixels>,
+    cutout: bool,
+    window: &mut Window,
+) {
     let width = f32::from(bounds.size.width);
     let height = f32::from(bounds.size.height);
     let source_size = source.size(0);
@@ -40,63 +77,145 @@ pub(crate) fn paint(source: Arc<RenderImage>, bounds: Bounds<Pixels>, window: &m
         source,
         0,
         false,
-        Some(mask(bounds)),
+        Some(mask(bounds, composer, cutout)),
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{Context, Render, canvas, div, prelude::*};
 
-    // The radius-zero rectangle SDF and smoothstep used by ImageAlphaMask.
-    fn alpha(mask: ImageAlphaMask, x: f32, y: f32) -> f32 {
-        let center = mask.bounds.center();
-        let dx = (x - f32::from(center.x)).abs() - f32::from(mask.bounds.size.width) * 0.5;
-        let dy = (y - f32::from(center.y)).abs() - f32::from(mask.bounds.size.height) * 0.5;
-        let distance = dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0);
-        let t = ((distance - f32::from(mask.clearance)) / f32::from(mask.feather)).clamp(0.0, 1.0);
-        t * t * (3.0 - 2.0 * t)
+    #[gpui::test]
+    fn background_paint_sees_same_frame_composer_bounds_even_when_painted_first(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        struct Fixture {
+            surface: SurfaceBounds,
+            painted: SurfaceBounds,
+            source: Arc<RenderImage>,
+            left: f32,
+            width: f32,
+        }
+        impl Render for Fixture {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let surface = self.surface.clone();
+                let painted = self.painted.clone();
+                let measured = self.surface.clone();
+                let source = self.source.clone();
+                div()
+                    .relative()
+                    .size_full()
+                    .child(
+                        canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| {
+                                painted.set(surface.get());
+                                if let Some(composer) = surface.get() {
+                                    paint(source, bounds, composer, true, window);
+                                }
+                            },
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(self.left))
+                            .top(px(360.25))
+                            .w(px(self.width))
+                            .h(px(124.0))
+                            .child(
+                                canvas(
+                                    move |bounds, _, _| measured.set(Some(bounds)),
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .inset_0(),
+                            ),
+                    )
+            }
+        }
+        let surface: SurfaceBounds = Default::default();
+        let painted: SurfaceBounds = Default::default();
+        let handle = cx.add_window(|_, _| Fixture {
+            surface: surface.clone(),
+            painted: painted.clone(),
+            source: Arc::new(RenderImage::new([image::Frame::new(
+                image::RgbaImage::from_pixel(2, 2, image::Rgba([79, 151, 233, 180])),
+            )])),
+            left: 40.0,
+            width: 768.0,
+        });
+        for (left, width) in [
+            (40.0, 768.0),
+            (264.0, 544.0),
+            (152.25, 656.0),
+            (40.0, 408.0),
+            (40.0, 768.0),
+        ] {
+            handle
+                .update(cx, |fixture, _, cx| {
+                    fixture.left = left;
+                    fixture.width = width;
+                    cx.notify();
+                })
+                .unwrap();
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.draw(cx).clear();
+            })
+            .unwrap();
+            let actual = painted.get().expect("no cold first-frame geometry");
+            assert_eq!(Some(actual), surface.get());
+            // GPUI layout snaps to physical pixels; the mask must consume
+            // that exact measured surface, not the unrounded layout request.
+            assert!((f32::from(actual.left()) - left).abs() <= 0.5);
+            assert_eq!(actual.size.width, px(width));
+        }
     }
 
     #[test]
-    fn new_thread_fade_is_uniform_across_the_width_and_spans_the_full_image() {
-        for (left, top, width, height) in [
-            (0.0, 0.0, 1440.0, 691.2),
-            (224.25, 40.5, 775.75, 489.6),
-            (0.0, 0.0, 800.0, 288.0),
-        ] {
-            let mask = mask(Bounds::new(
-                point(px(left), px(top)),
-                size(px(width), px(height)),
-            ));
-            for x in [left, left + width * 0.25, left + width * 0.5, left + width] {
-                for (fraction, expected) in [
-                    (0.0, 1.0),
-                    (0.25, 0.84375),
-                    (0.5, 0.5),
-                    (0.75, 0.15625),
-                    (1.0, 0.0),
-                ] {
-                    assert!((alpha(mask, x, top + height * fraction) - expected).abs() < 0.0001);
-                }
+    fn mask_tracks_current_surface_in_window_space_without_rounding() {
+        for sidebar in [0.0, 112.25, 224.0] {
+            for right_panel in [0.0, 360.0] {
+                let hero = Bounds::new(
+                    point(px(sidebar), px(40.0)),
+                    size(px(1200.0 - sidebar), px(440.0)),
+                );
+                let composer = Bounds::new(
+                    point(px(sidebar + 40.5), px(360.25)),
+                    size(px(900.0 - sidebar - right_panel), px(124.0)),
+                );
+                let mask = mask(hero, composer, true);
+                assert_eq!(mask.bounds, composer);
+                assert_eq!(mask.bottom_fade, Some((px(480.0), px(264.0))));
+                assert_eq!(mask.feather, px(440.0 * 0.52));
+                assert_eq!(mask.clearance, px(8.0));
             }
         }
     }
 
     #[test]
-    fn new_thread_fade_never_reappears_and_settles_gently_at_both_ends() {
-        let mask = mask(Bounds::new(
-            point(px(0.0), px(0.0)),
-            size(px(1440.0), px(691.2)),
-        ));
-        let mut previous = 1.0;
-        for y in 0..=692 {
-            let current = alpha(mask, 720.0, y as f32);
-            assert!(current <= previous);
-            assert!(previous - current < 0.0022);
-            previous = current;
-        }
-        assert!(1.0 - alpha(mask, 720.0, 1.0) < 0.00001);
-        assert!(alpha(mask, 720.0, 690.2) < 0.00001);
+    fn taller_background_stays_cleared_below_the_composer() {
+        let hero = Bounds::new(point(px(0.0), px(0.0)), size(px(1440.0), px(691.2)));
+        let composer = Bounds::new(point(px(352.0), px(406.0)), size(px(736.0), px(124.0)));
+        let mask = mask(hero, composer, true);
+        assert_eq!(mask.bounds.origin, composer.origin);
+        assert_eq!(mask.bounds.size.width, composer.size.width);
+        assert_eq!(mask.bounds.bottom(), hero.bottom());
+        assert_eq!(mask.feather, px(280.0));
+    }
+    #[test]
+    fn new_thread_cutout_reveal_preserves_the_bottom_fade_and_image_extent() {
+        let hero = Bounds::new(point(px(0.0), px(0.0)), size(px(1440.0), px(691.2)));
+        let composer = Bounds::new(point(px(352.0), px(406.0)), size(px(736.0), px(124.0)));
+        let cutout = mask(hero, composer, true);
+        let reveal = mask(hero, composer, false);
+        assert_eq!(cutout.bottom_fade, reveal.bottom_fade);
+        assert!(reveal.bounds.top() - reveal.feather >= hero.bottom());
+        assert_eq!(reveal.radius, px(0.0));
+        assert_eq!(reveal.clearance, px(0.0));
+        assert_eq!(CUTOUT_REVEAL_OPACITY, 0.5);
     }
 }

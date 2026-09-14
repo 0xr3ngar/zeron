@@ -856,6 +856,7 @@ fn new_thread_background(
     artwork: Option<std::sync::Arc<gpui::RenderImage>>,
     viewport_height: f32,
     hero_width: f32,
+    composer_bounds: crate::new_thread_background_mask::SurfaceBounds,
     dissolve: f32,
     opacity: f32,
 ) -> AnyElement {
@@ -877,16 +878,36 @@ fn new_thread_background(
         .opacity((1.0 - dissolve) * opacity)
         // Alpha resolves into the real canvas, including translucent themes;
         // no theme-colored overlay bleaches or darkens the source pixels.
-        .child(
-            gpui::canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _cx| {
-                    crate::new_thread_background_mask::paint(artwork.clone(), bounds, window);
-                },
-            )
-            .absolute()
-            .inset_0(),
-        )
+        .children([false, true].into_iter().map(|cutout| {
+            let artwork = artwork.clone();
+            let composer_bounds = composer_bounds.clone();
+            div()
+                .absolute()
+                .inset_0()
+                .opacity(if cutout {
+                    1.0
+                } else {
+                    crate::new_thread_background_mask::CUTOUT_REVEAL_OPACITY
+                })
+                .child(
+                    gpui::canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _cx| {
+                            if let Some(composer) = composer_bounds.get() {
+                                crate::new_thread_background_mask::paint(
+                                    artwork.clone(),
+                                    bounds,
+                                    composer,
+                                    cutout,
+                                    window,
+                                );
+                            }
+                        },
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+        }))
         .into_any_element()
 }
 
@@ -7093,6 +7114,7 @@ impl Shell {
                 artwork,
                 self.viewport_height,
                 (self.viewport_width - self.sidebar_now()).max(0.0),
+                self.composer.read(cx).surface_bounds(),
                 dock_frame.dissolve(),
                 artwork_opacity * new_thread_background_opacity(theme.is_frost()),
             )
