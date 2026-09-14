@@ -7690,14 +7690,8 @@ impl Render for Composer {
         let appshot_strip = self.render_appshot_strip(&theme, window, cx);
         let comments_chip = self.render_comments_chip(&theme, cx);
 
-        // The pill chrome (zeron composer.tsx): `rounded-[26px] border
-        // border-white/[0.08] bg-white/[0.03] shadow-xl` — a floating pill with
-        // a hairline over a faint wash, never a solid grey box. Picker chips,
-        // attach, and the send circle all live INSIDE the pill.
-        let pill_bg = theme.input_glass_bg();
-        // No drop shadow on glass: it paints BEHIND the translucent fill and
-        // shows through as an inner glow (theme.rs's card_selected_shadows
-        // lesson; user report).
+        // Let the backdrop blur supply the glass surface without a color wash.
+        // Keep the opaque fallback when frost is disabled or unsupported.
         let pill = div()
             .on_mouse_down(
                 MouseButton::Left,
@@ -7710,10 +7704,11 @@ impl Render for Composer {
                 }),
             )
             .rounded(px(surface_radius))
-            .bg(pill_bg)
             .border_1()
             .border_color(theme.border)
-            .when(!theme.is_frost(), |el| el.shadow_lg());
+            .when(!theme.is_frost(), |el| {
+                el.bg(theme.input_glass_bg()).shadow_lg()
+            });
         // The pill's bottom edge is stationary on screen (the composer sits at
         // the bottom of the shell column; growth moves the TOP edge), so the
         // controls pin to the bottom and only the text glides with the reveal
