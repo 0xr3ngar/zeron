@@ -7,12 +7,23 @@ pub(crate) type SurfaceBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 fn mask(bounds: Bounds<Pixels>, composer: Bounds<Pixels>) -> ImageAlphaMask {
     let height = f32::from(bounds.size.height);
+    // Keep the cleared area open through the hero's bottom. A taller image
+    // must not fade back in beneath the composer's rounded lower edge.
+    let cleared = Bounds::new(
+        composer.origin,
+        size(
+            composer.size.width,
+            composer.bottom().max(bounds.bottom()) - composer.top(),
+        ),
+    );
     ImageAlphaMask {
-        bounds: composer,
+        bounds: cleared,
         radius: px(crate::composer::COMPOSER_RADIUS),
-        feather: px((height * 0.52).clamp(120.0, 220.0)),
+        feather: px((height * 0.52).clamp(120.0, 280.0)),
         clearance: px(8.0),
-        bottom_fade: Some((bounds.bottom(), px((height * 0.22).max(1.0)))),
+        // Use most of the taller hero for the smoothstep ramp, so the image
+        // settles into the canvas without a short, visibly dark band.
+        bottom_fade: Some((bounds.bottom(), px((height * 0.60).max(1.0)))),
     }
 }
 
@@ -159,10 +170,21 @@ mod tests {
                 );
                 let mask = mask(hero, composer);
                 assert_eq!(mask.bounds, composer);
-                assert_eq!(mask.bottom_fade, Some((px(480.0), px(96.8))));
-                assert_eq!(mask.feather, px(220.0));
+                assert_eq!(mask.bottom_fade, Some((px(480.0), px(264.0))));
+                assert_eq!(mask.feather, px(440.0 * 0.52));
                 assert_eq!(mask.clearance, px(8.0));
             }
         }
+    }
+
+    #[test]
+    fn taller_background_stays_cleared_below_the_composer() {
+        let hero = Bounds::new(point(px(0.0), px(0.0)), size(px(1440.0), px(691.2)));
+        let composer = Bounds::new(point(px(352.0), px(406.0)), size(px(736.0), px(124.0)));
+        let mask = mask(hero, composer);
+        assert_eq!(mask.bounds.origin, composer.origin);
+        assert_eq!(mask.bounds.size.width, composer.size.width);
+        assert_eq!(mask.bounds.bottom(), hero.bottom());
+        assert_eq!(mask.feather, px(280.0));
     }
 }

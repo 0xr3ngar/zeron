@@ -690,11 +690,11 @@ const SIDEBAR_ARCHIVED_HARNESS_TITLE_GAP: f32 = 10.0;
 const SIDEBAR_GLASS_FADE_BAND: f32 = 24.0;
 
 /// New-thread controls float over the tail of a top-anchored image hero. The
-/// hero never occupies half the viewport, and its lower mask dissolves into
-/// the page before the otherwise empty lower canvas.
+/// hero reaches below the composer, giving its lower mask room to dissolve
+/// gradually into the otherwise empty lower canvas.
 const NEW_THREAD_BACKGROUND_FROSTED_OPACITY: f32 = 0.84;
-const NEW_THREAD_BACKGROUND_VIEWPORT_RATIO: f32 = 0.46;
-const NEW_THREAD_BACKGROUND_MAX_HEIGHT: f32 = 440.0;
+const NEW_THREAD_BACKGROUND_VIEWPORT_RATIO: f32 = 0.72;
+const NEW_THREAD_BACKGROUND_MAX_HEIGHT: f32 = 760.0;
 
 /// Drag marker for the sidebar resize handle.
 struct SidebarResize;
@@ -9881,10 +9881,11 @@ mod tests {
             new_thread_background_opacity(true),
             NEW_THREAD_BACKGROUND_FROSTED_OPACITY
         );
-        assert_eq!(new_thread_background_height(400.0), 184.0);
-        assert_eq!(new_thread_background_height(600.0), 276.0);
-        assert_eq!(new_thread_background_height(1_000.0), 440.0);
-        assert!(new_thread_background_height(848.0) < 848.0 / 2.0);
+        assert_eq!(new_thread_background_height(400.0), 288.0);
+        assert!((new_thread_background_height(600.0) - 432.0).abs() < 0.001);
+        assert_eq!(new_thread_background_height(1_000.0), 720.0);
+        assert_eq!(new_thread_background_height(1_200.0), 760.0);
+        assert!(new_thread_background_height(848.0) > 848.0 / 2.0);
     }
 
     #[test]
