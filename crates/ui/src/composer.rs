@@ -396,7 +396,7 @@ pub const CLUSTER_Y_DELTA: f32 = 2.5;
 
 /// Send's right inset differs between compact (8px) and expanded (12px).
 /// Glide this four-pixel shift during the morph. Attachment stays on the
-/// left; the model picker slides between the left and right groups.
+/// left; the model picker fades between the left and right groups.
 pub const CLUSTER_X_DELTA: f32 = 4.0;
 /// Optical join between the picker group and the paperclip. This is tighter
 /// than the structural spacing ladder because the narrow paperclip glyph
@@ -404,6 +404,17 @@ pub const CLUSTER_X_DELTA: f32 = 4.0;
 pub const ACTION_UTILITY_GAP: f32 = 2.0;
 /// Structural separation between utility actions and the primary Send action.
 pub const ACTION_PRIMARY_GAP: f32 = Theme::SPACE_SM;
+
+/// Fade out at the old endpoint, relocate while invisible, then fade in at
+/// the new endpoint. Only a six-pixel nudge is visible; a long label never
+/// sweeps across the prompt. Compact amount is reversible with the shared clock.
+fn model_handoff(compact: f32) -> (f32, f32, f32) {
+    let compact = compact.clamp(0.0, 1.0);
+    let side = if compact < 0.5 { 0.0 } else { 1.0 };
+    let opacity = ((compact - 0.5).abs() - 0.06).max(0.0) / 0.44;
+    let drift = (1.0 - opacity) * if side == 0.0 { 6.0 } else { -6.0 };
+    (side, opacity, drift)
+}
 
 /// The right inset for the in-flight morph: eases from the OLD mode's resting
 /// inset to the committed mode's (compact 8 ↔ expanded 12).
@@ -4116,9 +4127,9 @@ pub struct Composer {
     /// Pill height actually rendered last frame — a committed flip morphs
     /// from here, so mid-flight reversals hand off without a jump.
     last_rendered_height: f32,
-    model_slide_position: f32,
-    model_slide_from: f32,
-    model_slide_morph: Option<FlipMorph>,
+    model_handoff_position: f32,
+    model_handoff_from: f32,
+    model_handoff_morph: Option<FlipMorph>,
     model_bounds: Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
     dock_frame: Option<crate::composer_dock::DockFrame>,
     /// The shared clock owns this frame's height, including its final step.
@@ -4318,9 +4329,9 @@ impl Composer {
             settle_task: None,
             flip_morph: None,
             last_rendered_height: 0.0,
-            model_slide_position: 1.0,
-            model_slide_from: 1.0,
-            model_slide_morph: None,
+            model_handoff_position: 1.0,
+            model_handoff_from: 1.0,
+            model_handoff_morph: None,
             model_bounds: Default::default(),
             dock_frame: None,
             dock_height_changed: false,
@@ -7620,24 +7631,24 @@ impl Render for Composer {
         // the bottom of the shell column; growth moves the TOP edge), so the
         // controls pin to the bottom and only the text glides with the reveal
         // (round-9 follow-up: the send/attach/chips must not ride the height,
-        // and none of them fade — the full cluster stays visible throughout).
+        // while the model picker fades between its two horizontal anchors).
         let cluster_dy = morph_cluster_dy(layout_morph_t);
         // Share the height/route timeline instead of starting an independent
-        // animation. Reversals begin at the last visible horizontal position.
-        if self.model_slide_morph != self.flip_morph {
-            self.model_slide_from = self.model_slide_position;
-            self.model_slide_morph = self.flip_morph;
+        // animation. Reversals continue from the current handoff phase.
+        if self.model_handoff_morph != self.flip_morph {
+            self.model_handoff_from = self.model_handoff_position;
+            self.model_handoff_morph = self.flip_morph;
         }
         let compact_target = if expanded { 0.0 } else { 1.0 };
-        self.model_slide_position =
+        self.model_handoff_position =
             if self.dock_frame.is_some_and(|frame| frame.active) && !session_expanded {
                 dock_amount
             } else {
                 self.flip_morph.map_or(compact_target, |morph| {
                     motion::lerp(
-                        self.model_slide_from,
+                        self.model_handoff_from,
                         compact_target,
-                        morph.progress(now_ms),
+                        motion::EASE_IN_OUT.eval(morph.raw(now_ms)),
                     )
                 })
             };
@@ -7660,13 +7671,15 @@ impl Render for Composer {
             - 28.0
             - morph_cluster_inset(expanded, layout_morph_t))
         .max(0.0);
-        let model_offset = (self.model_slide_position - compact_target) * model_travel;
+        let (model_side, model_opacity, model_drift) = model_handoff(self.model_handoff_position);
+        let model_offset = (model_side - compact_target) * model_travel + model_drift;
         let measured_model_bounds = self.model_bounds.clone();
         let model_picker = div()
             .min_w_0()
             .max_w(px(surface_width * 0.45))
             .relative()
             .left(px(model_offset))
+            .opacity(model_opacity)
             .child(self.pickers.clone())
             .child(
                 gpui::canvas(
@@ -7683,9 +7696,8 @@ impl Render for Composer {
             // the 2.5px compact↔expanded centering delta gliding out. The
             // text viewport follows the animated height so it cannot paint
             // over the controls. Its width stays fixed (no tween rewraps);
-            // top padding eases 12→16. The whole control cluster stays at
-            // full alpha — chips,
-            // attach and send are all (near-)stationary on the bottom anchor.
+            // top padding eases 12→16. Attachment and Send stay on the bottom
+            // anchor while the model chip fades between its horizontal slots.
             pill.h(px(pill_height))
                 .overflow_hidden()
                 .relative()
@@ -7741,8 +7753,8 @@ impl Render for Composer {
             // The row is BOTTOM-justified: during the collapse morph the pill
             // top sweeps down over a stationary row, the text walks down from
             // its expanded resting place via a decaying relative offset, and
-            // the whole inline cluster (chips + attach/send) holds its spot at
-            // full alpha (2.5px centering delta gliding in).
+            // attachment/Send hold their spots (2.5px centering delta gliding
+            // in), with the model handoff sharing that same timeline.
             let text_glide = if self.dock_frame.is_some_and(|frame| frame.active) {
                 collapse_text_glide(dock_height(0.0), dock_amount)
             } else {
@@ -8038,7 +8050,8 @@ mod tests {
                     let left = surface.left() + px(1.0 + 12.0 + 28.0 + ACTION_UTILITY_GAP);
                     let travel = surface.size.width - px(2.0 + 12.0 + 28.0 + ACTION_UTILITY_GAP
                         + ACTION_PRIMARY_GAP + 28.0 + motion::lerp(12.0, 8.0, amount)) - model.size.width;
-                    let expected_x = left + travel * amount;
+                    let (side, _, drift) = model_handoff(amount);
+                    let expected_x = left + travel * side + px(drift);
                     assert!((f32::from(model.left() - expected_x)).abs() <= 1.0,
                         "model jumped: docked={docked}, amount={amount}, actual={model:?}, expected={expected_x:?}");
                     let expected = if docked { COMPACT_TOTAL_HEIGHT } else { COMPOSER_MIN_HEIGHT };
@@ -8046,6 +8059,21 @@ mod tests {
                     assert!((composer.last_rendered_height - motion::lerp(COMPOSER_MIN_HEIGHT, COMPACT_TOTAL_HEIGHT, amount)).abs() < 0.1);
                 }).unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn model_handoff_hides_relocation_and_keeps_visible_motion_local() {
+        assert_eq!(model_handoff(0.0), (0.0, 1.0, 0.0));
+        assert_eq!(model_handoff(1.0), (1.0, 1.0, -0.0));
+        for amount in [0.44, 0.49, 0.50, 0.51, 0.56] {
+            assert!(model_handoff(amount).1 < 0.0001);
+        }
+        for step in 0..=100 {
+            let (side, opacity, drift) = model_handoff(step as f32 / 100.0);
+            assert!((0.0..=1.0).contains(&opacity));
+            assert!(drift.abs() <= 6.0);
+            assert!(side == 0.0 || side == 1.0);
         }
     }
 
