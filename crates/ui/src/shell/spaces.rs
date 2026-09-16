@@ -2338,6 +2338,7 @@ impl Shell {
         let row = |ix: usize| {
             popover::menu_row(&theme, ix == active, format!("project-result-{ix}"))
                 .id(("project-result", ix))
+                .rounded(px(popover::PALETTE_ITEM_RADIUS))
                 .h(px(32.0))
                 .flex_none()
         };
@@ -2437,7 +2438,7 @@ impl Shell {
             .max_h(px((f32::from(viewport.height) - 220.0).clamp(100.0, 424.0)))
             .overflow_y_scroll()
             .track_scroll(&scroll)
-            .px(px(popover::MENU_GAP))
+            .px(px(popover::CARD_INSET))
             .flex()
             .flex_col()
             .gap(px(SIDEBAR_LIST_GAP))
@@ -2723,7 +2724,7 @@ impl Shell {
                 }))
                 .child(header)
                 .child(crumbs)
-                .child(div().min_h_0().py(px(popover::MENU_GAP)).child(results))
+                .child(div().min_h_0().py(px(popover::CARD_INSET)).child(results))
                 .when_some(error, |el, error| {
                     el.child(
                         div()

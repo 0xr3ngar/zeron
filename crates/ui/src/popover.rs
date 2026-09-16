@@ -301,11 +301,13 @@ pub fn classify_key(key: &str, cmd: bool, ctrl: bool) -> MenuKey {
 /// Corner radius must match the frost wrapper's mask.
 pub const CARD_RADIUS: f32 = 12.0;
 
-/// The two-pixel inset of [`popover_card`] that [`menu_scroll_host`] /
-/// [`menu_scroll_list`] cancel for card-bleeding scroll hosts.
 pub const MENU_GAP: f32 = 2.0;
-pub const MENU_ITEM_RADIUS: f32 = 4.0;
-pub const CARD_INSET: f32 = MENU_GAP;
+/// The four-pixel inset of [`popover_card`] that [`menu_scroll_host`] /
+/// [`menu_scroll_list`] cancel for card-bleeding scroll hosts.
+pub const CARD_INSET: f32 = 4.0;
+/// Concentric corners: the row radius follows the card's inset curve.
+pub const MENU_ITEM_RADIUS: f32 = CARD_RADIUS - CARD_INSET;
+pub const PALETTE_ITEM_RADIUS: f32 = 14.0 - CARD_INSET;
 
 pub fn surface_bg(theme: &Theme) -> gpui::Hsla {
     if theme.is_frost() {
@@ -519,8 +521,8 @@ pub fn nested_menu(id: impl Into<SharedString>, content: AnyElement, left: bool)
         .absolute()
         .top_0()
         .size_0()
-        .when(left, |el| el.left(px(-8.0)))
-        .when(!left, |el| el.right(px(-8.0)))
+        .when(left, |el| el.left(px(-(CARD_INSET + 6.0))))
+        .when(!left, |el| el.right(px(-(CARD_INSET + 6.0))))
         .child(
             gpui::deferred(
                 gpui::anchored()

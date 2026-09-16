@@ -3305,7 +3305,7 @@ impl Pickers {
         let mut tabs = div()
             .flex_none()
             .h(px(40.0))
-            .px(px(popover::MENU_GAP))
+            .px(px(popover::CARD_INSET))
             .border_b_1()
             .border_color(crate::theme::hairline(0.08))
             .flex()
@@ -3438,7 +3438,7 @@ impl Pickers {
                     },
                 )
                 .size_full()
-                .px(px(popover::MENU_GAP))
+                .px(px(popover::CARD_INSET))
                 .track_scroll(&model_scroll)
                 .into_any_element(),
             )
@@ -3482,7 +3482,7 @@ impl Pickers {
             .relative()
             .flex_none()
             .h(px(LIST_HEIGHT))
-            .py(px(popover::MENU_GAP))
+            .py(px(popover::CARD_INSET))
             // A whisper of wash keeps the scrolling band readable between
             // the pinned chrome above and the traits tray below.
             .bg(crate::theme::ink(0.02))
@@ -3496,7 +3496,7 @@ impl Pickers {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .px(px(popover::MENU_GAP))
+                    .px(px(popover::CARD_INSET))
                     .children(list_children)
                     .into_any_element(),
             })
@@ -3522,7 +3522,7 @@ impl Pickers {
                 // growing the card past the viewport.
                 .max_h(px(236.0))
                 .overflow_y_scroll()
-                .px(px(popover::MENU_GAP))
+                .px(px(popover::CARD_INSET))
                 .child(sections)
                 .into_any_element()
         });
@@ -3963,7 +3963,7 @@ impl Pickers {
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .py(px(popover::MENU_GAP))
+            .py(px(popover::CARD_INSET))
             .children(rows)
             .into_any_element()
     }

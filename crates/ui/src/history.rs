@@ -3202,7 +3202,7 @@ impl GitHistory {
                     .gap(px(0.0))
                     .px(px(7.0))
                     .py(px(4.0))
-                    .rounded(px(popover::MENU_ITEM_RADIUS))
+                    .rounded(px(9.0 - popover::CARD_INSET))
                     .text_size(px(11.5))
                     .on_click(cx.listener(|this, _, _, cx| {
                         cx.stop_propagation();
@@ -3244,7 +3244,7 @@ impl GitHistory {
                 .gap(px(0.0))
                 .px(px(7.0))
                 .py(px(4.0))
-                .rounded(px(popover::MENU_ITEM_RADIUS))
+                .rounded(px(9.0 - popover::CARD_INSET))
                 .text_size(px(11.5))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
@@ -3299,7 +3299,7 @@ impl GitHistory {
                                 .id("history-columns-reset")
                                 .px(px(7.0))
                                 .py(px(4.0))
-                                .rounded(px(popover::MENU_ITEM_RADIUS))
+                                .rounded(px(9.0 - popover::CARD_INSET))
                                 .text_size(px(11.5))
                                 .text_color(theme.text_muted)
                                 .on_click(cx.listener(|this, _, _, cx| {

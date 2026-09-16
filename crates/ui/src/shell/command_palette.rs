@@ -2,7 +2,7 @@
 use super::*;
 
 const HISTORY_RESULT_LIMIT: usize = 30;
-const RESULTS_SCROLL_GUTTER: f32 = popover::MENU_GAP;
+const RESULTS_SCROLL_GUTTER: f32 = popover::CARD_INSET;
 
 pub(super) struct CommandPalette {
     search: Entity<ComposerInput>,
@@ -204,6 +204,7 @@ impl Shell {
                 let entry = entry.clone();
                 popover::menu_row(&theme, ix == active, format!("command-action-{ix}"))
                     .id(("command-action", ix))
+                    .rounded(px(popover::PALETTE_ITEM_RADIUS))
                     .h(px(32.0))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_command(entry.clone(), window, cx)
@@ -275,7 +276,7 @@ impl Shell {
             } else {
                 unreachable!()
             };
-            rows.push(row.child(div().px(px(popover::MENU_GAP)).child(content)));
+            rows.push(row.child(div().px(px(popover::CARD_INSET)).child(content)));
         }
         let height = (f32::from(viewport.height) - 180.0).clamp(100.0, 440.0);
         let body = div()

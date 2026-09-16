@@ -5718,7 +5718,7 @@ impl Shell {
             .flex_col()
             .gap(px(2.0))
             .rounded(px(if search_query.is_some() {
-                popover::MENU_ITEM_RADIUS
+                popover::PALETTE_ITEM_RADIUS
             } else {
                 8.0
             }))
