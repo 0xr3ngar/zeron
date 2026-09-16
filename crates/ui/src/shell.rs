@@ -1334,6 +1334,7 @@ pub struct Shell {
     right_terminal: Option<Entity<TerminalPanel>>,
     /// The surface-tab strip's `+` menu (Files / Terminal / Diffs / History rows).
     right_plus: popover::Popup<()>,
+    side_chat_history_popup: popover::Popup<()>,
     /// Diff surfaces by id — each tab its own [`Changes`] viewer with its own
     /// scope/base pick and diff watch (multiple diff panels, user request).
     diffs: std::collections::HashMap<u64, Entity<Changes>>,
@@ -1720,6 +1721,7 @@ impl Shell {
             terminal: None,
             right_terminal: None,
             right_plus: popover::Popup::default(),
+            side_chat_history_popup: popover::Popup::default(),
             diffs: std::collections::HashMap::new(),
             files: std::collections::HashMap::new(),
             files_subs: std::collections::HashMap::new(),
@@ -6897,6 +6899,13 @@ impl Shell {
             return true;
         }
 
+        if self.side_chat_history_popup.is_open() {
+            self.close_side_chat_history(cx);
+            return true;
+        }
+        if self.side_chat_history_popup.get().is_some() {
+            return true;
+        }
         if self.right_plus.is_open() {
             self.close_right_plus(cx);
             return true;
@@ -8134,7 +8143,10 @@ impl Shell {
             .overflow_hidden()
             // The titlebar is a glass overlay over the full-height content
             // row; the panel's own chrome starts below it.
-            .pt(px(Theme::TITLEBAR_HEIGHT))
+            .when(
+                !matches!(self.resolved_right_active(cx), RightSurface::SideChat(_)),
+                |el| el.pt(px(Theme::TITLEBAR_HEIGHT)),
+            )
             .child(content);
         let target = self.right_target(cx);
         let edge_offset = self.eval_resize_edge_bounce(
@@ -8186,6 +8198,7 @@ impl Shell {
         };
         div()
             .size_full()
+            .relative()
             .flex()
             .items_center()
             .justify_center()
@@ -8214,7 +8227,6 @@ impl Shell {
                             .clone()
                             .map(|error| div().text_color(theme.text_muted).child(error)),
                     )
-                    .child(history)
                     .child(
                         row("surface-card-files", icons::FOLDER_WITH_FILES, "Files").on_click(
                             cx.listener(|this, _, window, cx| {
@@ -8251,6 +8263,7 @@ impl Shell {
                         )
                     }),
             )
+            .child(history)
             .into_any_element()
     }
 
@@ -8534,6 +8547,25 @@ impl Shell {
                     this.set_right_active(surface, cx);
                     this.focus_right_file_editor(surface, window, cx);
                 }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                        if let RightSurface::SideChat(id) = surface {
+                            if let Some(chat_id) = this
+                                .side_chats
+                                .get(&id)
+                                .and_then(|tab| tab.state.read(cx).selected_chat.clone())
+                            {
+                                this.chat_menu.open(ChatMenuState {
+                                    chat_id,
+                                    position: event.position,
+                                    page: ChatMenuPage::Root,
+                                });
+                                cx.notify();
+                            }
+                        }
+                    }),
+                )
                 // Middle-click closes, like every tab strip.
                 .on_mouse_down(
                     gpui::MouseButton::Middle,
