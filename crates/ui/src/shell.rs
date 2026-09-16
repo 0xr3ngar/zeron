@@ -43,6 +43,7 @@ use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::harnesses::HarnessesPage;
 use crate::settings::notifications::{NotificationsEvent, NotificationsPage};
 use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
+use crate::settings::workspace::{WorkspaceEvent, WorkspacePage};
 use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, JUMP_SLOTS, KeymapConfig, RIGHT_PANE_DEFAULT,
     RIGHT_PANE_MIN, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, SavePolicy, ShortcutId,
@@ -397,6 +398,7 @@ pub fn apply_keymap(
 /// The settings sections (feature-inventory §1.5 routes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
+    Workspace,
     Devices,
     /// Which harnesses the composer offers (enable/disable toggles).
     Harnesses,
@@ -411,7 +413,8 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 9] = [
+    pub const ALL: [SettingsSection; 10] = [
+        SettingsSection::Workspace,
         SettingsSection::Devices,
         SettingsSection::Harnesses,
         SettingsSection::Agents,
@@ -427,6 +430,7 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
+            SettingsSection::Workspace => "Workspace",
             SettingsSection::Devices => "Devices",
             SettingsSection::Harnesses => "Agents",
             SettingsSection::Agents => "Accounts",
@@ -1065,10 +1069,18 @@ fn resolve_shell_escape(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AccountMenuAction {
     EnableSync,
+    PrivateWorkspace,
     SyncInProgress,
     /// Postponed switch wizard (or legacy restart fallback) — reopen it.
     RestartPending,
     SignOut,
+}
+
+#[derive(Clone, Copy)]
+struct PrivateTransition {
+    target: WorkspaceScope,
+    import: bool,
+    background: bool,
 }
 
 const RUNTIME_CHANGE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1197,6 +1209,11 @@ fn account_menu_action(scope: Option<WorkspaceScope>, flow: SyncFlow) -> Option<
             _ if flow.is_switch_lifecycle() => Some(AccountMenuAction::SyncInProgress),
             _ => Some(AccountMenuAction::SignOut),
         },
+        Some(WorkspaceScope::Private) => match flow {
+            SyncFlow::ImportFailed { .. } => Some(AccountMenuAction::RestartPending),
+            _ if flow.is_switch_lifecycle() => Some(AccountMenuAction::SyncInProgress),
+            _ => Some(AccountMenuAction::PrivateWorkspace),
+        },
         Some(WorkspaceScope::Development) | None => None,
     }
 }
@@ -1235,6 +1252,13 @@ fn sync_flow_after_auth(
                 _ => SyncFlow::Idle,
             },
         },
+        Some(WorkspaceScope::Private) => {
+            if flow.is_switch_lifecycle() {
+                flow
+            } else {
+                SyncFlow::Idle
+            }
+        }
         Some(WorkspaceScope::Development) => SyncFlow::Idle,
         None => flow,
     }
@@ -1380,6 +1404,9 @@ pub struct Shell {
     /// Route history behind the titlebar back/forward buttons (§ nav history).
     nav: NavHistory,
     devices_page: Option<Entity<DevicesPage>>,
+    workspace_page: Option<Entity<WorkspacePage>>,
+    workspace_sub: Option<Subscription>,
+    private_transition: Option<PrivateTransition>,
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
@@ -1657,6 +1684,7 @@ impl Shell {
                 Route::Settings(SettingsSection::Devices)
             }
             Some("settings/agents") => Route::Settings(SettingsSection::Agents),
+            Some("settings/workspace") => Route::Settings(SettingsSection::Workspace),
             Some("settings/harnesses") => Route::Settings(SettingsSection::Harnesses),
             Some("settings/appearance") => Route::Settings(SettingsSection::Appearance),
             Some("settings/notifications") => Route::Settings(SettingsSection::Notifications),
@@ -1747,6 +1775,9 @@ impl Shell {
             route,
             nav,
             devices_page: None,
+            workspace_page: None,
+            workspace_sub: None,
+            private_transition: None,
             archived_page: None,
             appearance_page: None,
             files_settings_page: None,
@@ -1899,6 +1930,15 @@ impl Shell {
     // ---- splash ----
 
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
+        if matches!(state.read(cx).connection, ConnectionStatus::Ready)
+            && let Some(invitation) = state.update(cx, |state, _| state.private_invitation.take())
+        {
+            self.open_settings(SettingsSection::Workspace, cx);
+            self.ensure_workspace_page(cx);
+            if let Some(page) = &self.workspace_page {
+                page.update(cx, |page, cx| page.prefill_invitation(invitation, cx));
+            }
+        }
         if let Some(notice) = state.update(cx, |state, _| state.take_deep_link_notice()) {
             self.sidebar_notice = Some(notice.into());
         }
@@ -1918,6 +1958,7 @@ impl Shell {
         // The in-place local→synced switch: once the replacement runtime is
         // attached and Ready, kick the import (or finish) from here.
         self.drive_sync_switch(cx);
+        self.drive_private_switch(cx);
         let signed_out_synced = {
             let state = state.read(cx);
             state.workspace_scope == Some(WorkspaceScope::Synced)
@@ -3556,6 +3597,9 @@ impl Shell {
                 state.workspace_scope,
                 state.auth.as_ref(),
                 state.local_device_id.as_deref(),
+                state
+                    .engine()
+                    .and_then(|engine| engine.engine_info().private_workspace_id.as_deref()),
             )
             .map(|workspace| crate::links::zeron_conversation_link(chat_id, &workspace))
         };
@@ -3607,6 +3651,10 @@ impl Shell {
         // CLIs are installed, so installing one shows up on the next open.
         if section == SettingsSection::Harnesses {
             self.harnesses_page = None;
+        }
+        if section == SettingsSection::Workspace && self.private_transition.is_none() {
+            self.workspace_page = None;
+            self.workspace_sub = None;
         }
         self.route = Route::Settings(section);
         self.nav.push(NavEntry::Settings(section));
@@ -3660,6 +3708,26 @@ impl Shell {
     }
 
     /// Lazily create the entity for a settings section and return it renderable.
+    fn ensure_workspace_page(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_page.is_some() {
+            return;
+        }
+        let state = self.state.clone();
+        let page = cx.new(|cx| WorkspacePage::new(state, cx));
+        self.workspace_sub = Some(cx.subscribe(
+            &page,
+            |this: &mut Shell, _, event, cx| match event {
+                WorkspaceEvent::StartCloud => this.start_sign_in(cx),
+                WorkspaceEvent::LeaveCloud => this.request_sign_out(cx),
+                WorkspaceEvent::RunInBackground => this.start_private_background(cx),
+                WorkspaceEvent::Restart { target, import } => {
+                    this.start_private_switch(*target, *import, cx)
+                }
+            },
+        ));
+        self.workspace_page = Some(page);
+    }
+
     fn settings_outlet(
         &mut self,
         section: SettingsSection,
@@ -3667,6 +3735,17 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match section {
+            SettingsSection::Workspace => {
+                self.ensure_workspace_page(cx);
+                let unsaved = self.workspace_files_dirty(cx);
+                if let Some(page) = &self.workspace_page {
+                    page.update(cx, |page, cx| page.set_unsaved_files(unsaved, cx));
+                }
+                self.workspace_page
+                    .as_ref()
+                    .map(|page| page.clone().into_any_element())
+                    .unwrap_or_else(|| Empty.into_any_element())
+            }
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     let state = self.state.clone();
@@ -4006,7 +4085,8 @@ impl Shell {
     /// so an unguarded jump would switch sessions UNDER the open popover,
     /// stranding it over a session the user never picked.
     pub(super) fn overlay_owns_keyboard(&self, cx: &App) -> bool {
-        self.command_palette.is_some()
+        self.private_transition.is_some()
+            || self.command_palette.is_some()
             || self.add_space.is_some()
             || self.composer.read(cx).pickers().read(cx).is_open()
     }
@@ -4216,11 +4296,241 @@ impl Shell {
         cx.notify();
     }
 
-    /// The wizard's choice step chose a path: stop the local runtime, boot the
-    /// synced one in-place (mirror of the sign-out transition), then let
-    /// [`Self::drive_sync_switch`] run the import once the runtime is ready.
-    /// Failure falls back to the quit-and-reopen dialog — the local profile is
-    /// untouched, so the old path is always a safe exit.
+    fn start_private_switch(
+        &mut self,
+        target: WorkspaceScope,
+        import: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.runtime_change_task.is_some() {
+            return;
+        }
+        if self.workspace_files_dirty(cx) {
+            self.fail_private_switch("Save or close edited files first.".into(), cx);
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        self.private_transition = Some(PrivateTransition {
+            target,
+            import,
+            background: false,
+        });
+        self.sync_flow = SyncFlow::Idle;
+        self.runtime_change_error = None;
+        let ipc_port = self.boot.ipc_port;
+        let data_dir = self.data_dir.clone();
+        let transition = Tokio::spawn(cx, async move {
+            stop_synced_runtime(engine, ipc_port, &data_dir).await
+        });
+        let state = self.state.clone();
+        let boot = self.boot.clone();
+        self.runtime_change_task = Some(cx.spawn(async move |this, cx| {
+            let result = match transition.await {
+                Ok(result) => result,
+                Err(error) => Err(error.to_string()),
+            };
+            this.update(cx, |shell, cx| {
+                shell.runtime_change_task = None;
+                match result {
+                    Ok(()) => {
+                        shell.org = None;
+                        shell.space_boot_applied = false;
+                        shell.clear_private_workspace_surfaces(cx);
+                        state.update(cx, |state, cx| state.prepare_runtime_replacement(cx));
+                        AppState::bootstrap(state.clone(), boot, cx);
+                    }
+                    Err(error) => shell.fail_private_switch(error, cx),
+                }
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn fail_private_switch(&mut self, error: String, cx: &mut Context<Self>) {
+        self.private_transition = None;
+        let error =
+            format!("Could not switch workspace: {error}. Retry the switch or restart Zeron.");
+        self.sidebar_notice = Some(error.clone().into());
+        if let Some(page) = &self.workspace_page {
+            page.update(cx, |page, cx| page.transition_failed(error, cx));
+        }
+        cx.notify();
+    }
+
+    fn start_private_background(&mut self, cx: &mut Context<Self>) {
+        if self.runtime_change_task.is_some() {
+            return;
+        }
+        if self.workspace_files_dirty(cx) {
+            self.fail_private_switch(
+                "Save or close edited files before changing background mode.".into(),
+                cx,
+            );
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        if engine.engine_info().workspace_scope != WorkspaceScope::Private
+            || engine.mode() != EngineMode::InProcess
+        {
+            return;
+        }
+        self.private_transition = Some(PrivateTransition {
+            target: WorkspaceScope::Private,
+            import: false,
+            background: true,
+        });
+        let ipc_port = self.boot.ipc_port;
+        let data_dir = self.data_dir.clone();
+        let handover = Tokio::spawn(cx, async move {
+            engine
+                .client()
+                .call(methods::PREPARE_PRIVATE_BACKGROUND, serde_json::json!({}))
+                .await
+                .map_err(|error| error.to_string())?;
+            stop_synced_runtime(engine, ipc_port, &data_dir).await?;
+            let install = async {
+                let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+                let output = tokio::process::Command::new(executable)
+                    .args(["daemon", "install"])
+                    .env("ZERON_DATA_DIR", &data_dir)
+                    .env("ZERON_IPC_PORT", ipc_port.to_string())
+                    .kill_on_drop(true)
+                    .output()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if !output.status.success() {
+                    return Err(format!(
+                        "Service installation failed: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ));
+                }
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+                loop {
+                    if tokio::net::TcpStream::connect(("127.0.0.1", ipc_port))
+                        .await
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(
+                            "The service did not start its local connection within 20 seconds."
+                                .into(),
+                        );
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+            .await;
+            Ok::<Result<(), String>, String>(install)
+        });
+        let state = self.state.clone();
+        let boot = self.boot.clone();
+        self.runtime_change_task = Some(cx.spawn(async move |this, cx| {
+            let result = handover.await.unwrap_or_else(|error| Err(error.to_string()));
+            this.update(cx, |shell, cx| {
+                shell.runtime_change_task = None;
+                match result {
+                    Err(error) => shell.fail_private_switch(error, cx),
+                    Ok(install) => {
+                        if let Err(error) = install {
+                            shell.private_transition = Some(PrivateTransition { target: WorkspaceScope::Private, import: false, background: false });
+                            shell.sidebar_notice = Some(format!("Could not start background mode: {error}. Reopening the workspace in the app.").into());
+                        }
+                        shell.space_boot_applied = false;
+                        shell.clear_private_workspace_surfaces(cx);
+                        state.update(cx, |state, cx| state.prepare_runtime_replacement(cx));
+                        AppState::bootstrap(state.clone(), boot, cx);
+                    }
+                }
+            }).ok();
+        }));
+        cx.notify();
+    }
+
+    fn drive_private_switch(&mut self, cx: &mut Context<Self>) {
+        let Some(PrivateTransition {
+            target,
+            import,
+            background,
+        }) = self.private_transition
+        else {
+            return;
+        };
+        if self.runtime_change_task.is_some() {
+            return;
+        }
+        let state = self.state.read(cx);
+        if let ConnectionStatus::Failed(error) = &state.connection {
+            self.fail_private_switch(error.clone(), cx);
+            return;
+        }
+        if state.connection != ConnectionStatus::Ready {
+            return;
+        }
+        if state.workspace_scope != Some(target) {
+            self.fail_private_switch("The engine opened a different workspace.".into(), cx);
+            return;
+        }
+        if background
+            && !state
+                .engine()
+                .is_some_and(|engine| matches!(engine.mode(), EngineMode::Remote { .. }))
+        {
+            self.fail_private_switch(
+                "The background service was not available; the engine is running in this app."
+                    .into(),
+                cx,
+            );
+            return;
+        }
+        self.private_transition = None;
+        self.workspace_page = None;
+        self.workspace_sub = None;
+        self.devices_page = None;
+        self.accounts_page = None;
+        self.harnesses_page = None;
+        if import {
+            self.spawn_local_import(cx);
+        }
+        cx.notify();
+    }
+
+    fn workspace_files_dirty(&self, cx: &App) -> bool {
+        self.files
+            .values()
+            .chain(self.file_surfaces.values())
+            .any(|surface| surface.read(cx).has_unsaved_changes())
+    }
+
+    fn clear_private_workspace_surfaces(&mut self, cx: &mut Context<Self>) {
+        self.files.clear();
+        self.files_subs.clear();
+        self.file_surfaces.clear();
+        self.file_surface_paths.clear();
+        self.file_surface_keys.clear();
+        self.file_surface_subs.clear();
+        self.diffs.clear();
+        self.diff_subs.clear();
+        self.subagent_tabs.clear();
+        self.terminal = None;
+        self.right_terminal = None;
+        self.right_tabs.clear();
+        for browser in self.browsers.values() {
+            browser.update(cx, |browser, cx| browser.close(cx));
+        }
+        self.browsers.clear();
+        self.browser_subs.clear();
+        self.browser_context = crate::browser::BrowserContext::default();
+        self.browser_profile = None;
+        self.nav = NavHistory::new(NavEntry::Settings(SettingsSection::Workspace));
+    }
+
     fn start_synced_switch(&mut self, import: bool, cx: &mut Context<Self>) {
         if self.runtime_change_task.is_some() {
             return;
@@ -4475,7 +4785,10 @@ impl Shell {
 
     fn start_sign_in(&mut self, cx: &mut Context<Self>) {
         let scope = self.state.read(cx).workspace_scope;
-        if scope == Some(WorkspaceScope::Development) {
+        if matches!(
+            scope,
+            Some(WorkspaceScope::Development | WorkspaceScope::Private)
+        ) {
             return;
         }
         self.close_user_menu(cx);
@@ -5347,6 +5660,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let section_icon = |item: SettingsSection| match item {
+            SettingsSection::Workspace => icons::GLOBAL,
             SettingsSection::Devices => icons::MONITOR,
             SettingsSection::Harnesses => icons::WIDGET,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
@@ -6005,6 +6319,11 @@ impl Shell {
                 Some("Local development runtime".into()),
                 "Authentication disabled".into(),
             ),
+            Some(WorkspaceScope::Private) => (
+                "Private workspace".into(),
+                Some("Via Tailscale".into()),
+                "Synced through your private hub".into(),
+            ),
             Some(WorkspaceScope::Synced) | None => {
                 let line: SharedString = user
                     .as_ref()
@@ -6380,13 +6699,29 @@ impl Shell {
                         AccountMenuAction::EnableSync => {
                             popover::menu_row(theme, false, "user-menu-enable-sync")
                                 .id("user-menu-enable-sync")
-                                .on_click(cx.listener(|this, _, _, cx| this.start_sign_in(cx)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_settings(SettingsSection::Workspace, cx)
+                                }))
                                 .child(
                                     icon(icons::GLOBAL)
                                         .size(px(16.0))
                                         .text_color(theme.text_muted),
                                 )
-                                .child(SharedString::from("Enable sync"))
+                                .child(SharedString::from("Set up sync"))
+                                .into_any_element()
+                        }
+                        AccountMenuAction::PrivateWorkspace => {
+                            popover::menu_row(theme, false, "user-menu-private-workspace")
+                                .id("user-menu-private-workspace")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_settings(SettingsSection::Workspace, cx)
+                                }))
+                                .child(
+                                    icon(icons::GLOBAL)
+                                        .size(px(16.0))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child("Private workspace settings")
                                 .into_any_element()
                         }
                         AccountMenuAction::SyncInProgress => {
@@ -6656,9 +6991,9 @@ impl Shell {
             }
             SyncFlow::ImportDone { imported, skipped } => {
                 let body: SharedString = match (imported, skipped) {
-                    (0, 0) => "Your synced workspace is ready.".into(),
+                    (0, 0) => "Your workspace is ready.".into(),
                     (n, 0) => format!(
-                        "{n} session{} moved into your synced workspace.",
+                        "{n} session{} copied into your workspace.",
                         if n == 1 { "" } else { "s" },
                     )
                     .into(),
@@ -6845,7 +7180,8 @@ impl Shell {
         // Modals and context menus sit above the rest of the shell. Preserve
         // their existing behavior: only surfaces that already have a Cancel
         // path close here; the others remain explicit blockers.
-        if self.sync_flow.has_visible_overlay()
+        if self.private_transition.is_some()
+            || self.sync_flow.has_visible_overlay()
             || self.delete_confirm.is_some()
             || self.delete_space_confirm.is_some()
             || self.chat_menu.get().is_some()
@@ -7232,6 +7568,16 @@ impl Shell {
 
         if let Some(sync) = self.render_sync_overlay(viewport, cx) {
             overlays.push(sync);
+        }
+        if self.private_transition.is_some() {
+            let card = popover::dialog_card(&theme)
+                .child(popover::dialog_title(&theme, "Switching workspace…"))
+                .child(popover::dialog_body(
+                    &theme,
+                    "Opening the selected workspace. Your saved work stays on disk.",
+                ))
+                .into_any_element();
+            overlays.push(popover::modal("private-workspace-switch", viewport, card));
         }
 
         overlays
@@ -9566,6 +9912,9 @@ impl Render for Shell {
                 state.workspace_scope,
                 state.auth.as_ref(),
                 state.local_device_id.as_deref(),
+                state
+                    .engine()
+                    .and_then(|engine| engine.engine_info().private_workspace_id.as_deref()),
             )
         };
         if browser_profile.is_some() && browser_profile != self.browser_profile {
@@ -10391,6 +10740,38 @@ mod tests {
     fn right_pane_takeover_control_reverses_direction() {
         assert_eq!(tabs::right_pane_expand_icon(false), icons::EXPAND_ARROWS);
         assert_eq!(tabs::right_pane_expand_icon(true), icons::COLLAPSE_ARROWS);
+    }
+
+    #[test]
+    fn private_workspace_does_not_offer_cloud_sign_in_or_sign_out() {
+        assert_eq!(
+            account_menu_action(Some(WorkspaceScope::Private), SyncFlow::Idle),
+            Some(AccountMenuAction::PrivateWorkspace)
+        );
+        assert_eq!(
+            sync_flow_after_auth(
+                SyncFlow::Idle,
+                Some(WorkspaceScope::Private),
+                Some(&AuthState::SignedOut)
+            ),
+            SyncFlow::Idle
+        );
+        let import = SyncFlow::Importing { done: 1, total: 2 };
+        assert_eq!(
+            sync_flow_after_auth(
+                import,
+                Some(WorkspaceScope::Private),
+                Some(&AuthState::SignedOut)
+            ),
+            import
+        );
+        assert_eq!(
+            account_menu_action(
+                Some(WorkspaceScope::Private),
+                SyncFlow::ImportFailed { notice_open: false }
+            ),
+            Some(AccountMenuAction::RestartPending)
+        );
     }
 
     #[test]

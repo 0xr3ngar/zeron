@@ -51,6 +51,7 @@ pub fn devices_subtitle(scope: Option<WorkspaceScope>) -> &'static str {
     match scope {
         Some(WorkspaceScope::Local) => "Manage device details stored in this local workspace.",
         Some(WorkspaceScope::Synced) => "Manage device names and inspect synced device metadata.",
+        Some(WorkspaceScope::Private) => "Manage devices connected through your private hub.",
         Some(WorkspaceScope::Development) | None => "Manage device names for this workspace.",
     }
 }

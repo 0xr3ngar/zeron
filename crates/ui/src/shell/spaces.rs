@@ -1786,7 +1786,12 @@ impl Shell {
         let Some(flow) = &self.add_space else {
             return Vec::new();
         };
-        let devices = &self.state.read(cx).devices;
+        let state = self.state.read(cx);
+        let devices: Vec<_> = state
+            .devices
+            .iter()
+            .filter(|device| state.can_execute_on(&device.id))
+            .collect();
         let names: Vec<_> = devices.iter().map(|d| d.name.as_str()).collect();
         popover::filter_indices(flow.search.read(cx).text(), &names)
             .into_iter()

@@ -459,6 +459,7 @@ impl EngineHandle {
                 lifecycle_task: tokio::sync::Mutex::new(None),
             }),
             engine_info: EngineInfo {
+                private_workspace_id: None,
                 device_id: "local".into(),
                 workspace_scope: WorkspaceScope::Local,
                 capabilities: Vec::new(),
@@ -506,6 +507,7 @@ async fn query_engine_info(client: &RpcClient) -> Result<EngineInfo, RpcError> {
                 .call_as(methods::LOCAL_DEVICE, serde_json::json!({}))
                 .await?;
             Ok(EngineInfo {
+                private_workspace_id: None,
                 device_id: legacy.device_id,
                 workspace_scope: WorkspaceScope::Synced,
                 capabilities: Vec::new(),
@@ -606,6 +608,7 @@ pub struct AppState {
     /// Fixed data boundary of the attached engine. Authentication may change
     /// in place, but changing this scope requires assembling a new runtime.
     pub workspace_scope: Option<WorkspaceScope>,
+    pub(crate) private_invitation: Option<crate::links::PrivateInvitationLink>,
     /// Auth stream value; `None` until the engine reports one (M4).
     pub auth: Option<AuthState>,
     pub devices: Vec<Device>,
@@ -679,6 +682,7 @@ pub struct AppState {
     transfers: HashMap<String, (u64, u64)>,
     /// Written by the changes pane, read by the composer.
     review_comments: HashMap<String, Vec<ReviewComment>>,
+    workspace_review_comments: HashMap<String, HashMap<String, Vec<ReviewComment>>>,
     /// File surfaces whose editor-backed comments currently cite a buffer
     /// revision that has not reached disk yet. A chat remains blocked until
     /// every surface waiting on a workspace write has finished or cancelled.
@@ -734,6 +738,7 @@ impl AppState {
         Self {
             connection: ConnectionStatus::Connecting,
             workspace_scope: None,
+            private_invitation: None,
             auth: None,
             devices: Vec::new(),
             device_presentation: None,
@@ -758,6 +763,7 @@ impl AppState {
             upload_progress: None,
             transfers: HashMap::new(),
             review_comments: HashMap::new(),
+            workspace_review_comments: HashMap::new(),
             review_comment_flushes: HashMap::new(),
             local_device_id: None,
             update: None,
@@ -1107,6 +1113,7 @@ impl AppState {
 
     pub fn apply_auth(&mut self, auth: AuthState) {
         self.auth = Some(auth);
+        self.restore_workspace_review_comments();
     }
 
     /// Tolerant AuthStatus frame reducer (see [`parse_auth_state`]).
@@ -1430,17 +1437,40 @@ impl AppState {
     /// when one is selected, else the explicit device pick, else this device.
     pub fn effective_device_id(&self) -> Option<String> {
         if let Some(space) = self.selected_space_row() {
-            return Some(space.device_id.clone());
+            if self.can_execute_on(&space.device_id) {
+                return Some(space.device_id.clone());
+            }
         }
         self.selected_device
             .clone()
+            .filter(|id| self.can_execute_on(id))
             .or_else(|| self.local_device_id.clone())
+            .filter(|id| self.can_execute_on(id))
+            .or_else(|| {
+                self.devices
+                    .iter()
+                    .find(|device| self.can_execute_on(&device.id))
+                    .map(|device| device.id.clone())
+            })
+    }
+
+    pub fn can_execute_on(&self, device_id: &str) -> bool {
+        if self.workspace_scope != Some(WorkspaceScope::Private) {
+            return true;
+        }
+        self.devices
+            .iter()
+            .find(|device| device.id == device_id)
+            .is_some_and(|device| device.role.as_deref() == Some("server"))
     }
 
     /// Pick the composer's target device. Keeps the project pick consistent:
     /// a project on another device can't survive the switch — fall back to
     /// the first project on the new device, else "no project".
     pub fn select_device(&mut self, device_id: String, cx: &mut Context<Self>) {
+        if !self.can_execute_on(&device_id) {
+            return;
+        }
         let project_moves = self
             .selected_space_row()
             .is_some_and(|s| s.device_id != device_id);
@@ -1610,10 +1640,36 @@ impl AppState {
         self.engine.as_ref()
     }
 
+    pub(crate) fn workspace_locator(&self) -> Option<String> {
+        crate::links::workspace_locator(
+            self.workspace_scope,
+            self.auth.as_ref(),
+            self.local_device_id.as_deref(),
+            self.engine
+                .as_ref()
+                .and_then(|engine| engine.engine_info().private_workspace_id.as_deref()),
+        )
+    }
+
+    fn restore_workspace_review_comments(&mut self) {
+        if let Some(key) = self.workspace_locator()
+            && let Some(comments) = self.workspace_review_comments.remove(&key)
+        {
+            self.review_comments = comments;
+        }
+    }
+
     /// Drop every account-scoped view and subscription after its runtime has
     /// stopped. The next bootstrap must never render rows from the previous
     /// account while the local profile is opening.
     pub fn prepare_runtime_replacement(&mut self, cx: &mut Context<Self>) {
+        if let Some(key) = self.workspace_locator() {
+            self.workspace_review_comments
+                .insert(key, std::mem::take(&mut self.review_comments));
+        } else {
+            self.review_comments.clear();
+        }
+        self.review_comment_flushes.clear();
         self.engine = None;
         self.watch_tasks.clear();
         self.transcript_task = None;
@@ -1696,6 +1752,7 @@ impl AppState {
         self.workspace_scope = Some(engine_info.workspace_scope);
         self.local_device_id = Some(engine_info.device_id.clone());
         self.engine = Some(handle.clone());
+        self.restore_workspace_review_comments();
         let mut watch_tasks = Vec::with_capacity(8);
         if let Some(task) = spawn_deferred_engine_watch(cx, handle.clone()) {
             watch_tasks.push(task);
@@ -1811,6 +1868,14 @@ impl AppState {
     }
 
     pub fn open_deep_link(&mut self, url: &str, cx: &mut Context<Self>) {
+        if url.starts_with("zeron://private/") {
+            match crate::links::parse_private_invitation_link(url) {
+                Ok(invitation) => self.private_invitation = Some(invitation),
+                Err(error) => self.deep_link_notice = Some(error.to_owned()),
+            }
+            cx.notify();
+            return;
+        }
         match crate::links::parse_zeron_conversation_link(url) {
             Ok(link) => {
                 self.pending_deep_link = Some(link);
@@ -1829,6 +1894,9 @@ impl AppState {
             self.workspace_scope,
             self.auth.as_ref(),
             self.local_device_id.as_deref(),
+            self.engine
+                .as_ref()
+                .and_then(|engine| engine.engine_info().private_workspace_id.as_deref()),
         ) else {
             return;
         };
@@ -2663,6 +2731,7 @@ mod tests {
             listener,
             Arc::new(DeferredIdentityRpc {
                 engine_info: EngineInfo {
+                    private_workspace_id: None,
                     device_id: "owner-device".into(),
                     workspace_scope: WorkspaceScope::Local,
                     capabilities: zeron_proto::capabilities::current(),
@@ -3102,6 +3171,7 @@ mod tests {
 
     fn device(id: &str, name: &str) -> Device {
         Device {
+            role: None,
             id: id.into(),
             name: name.into(),
             platform: "macos".into(),
@@ -3110,6 +3180,26 @@ mod tests {
             version: None,
             capabilities: Vec::new(),
         }
+    }
+
+    #[test]
+    fn private_client_targets_an_agent_server_instead_of_itself() {
+        let mut state = AppState::new();
+        state.workspace_scope = Some(WorkspaceScope::Private);
+        state.local_device_id = Some("client".into());
+        state.selected_device = Some("client".into());
+        let mut client = device("client", "Client");
+        client.role = Some("client".into());
+        let mut server = device("server", "Server");
+        server.role = Some("server".into());
+        state.devices = vec![client, server];
+        assert_eq!(state.effective_device_id().as_deref(), Some("server"));
+        assert!(!state.can_execute_on("client"));
+        assert!(!state.can_execute_on("unregistered"));
+        state.devices.pop();
+        assert_eq!(state.effective_device_id(), None);
+        state.workspace_scope = Some(WorkspaceScope::Local);
+        assert_eq!(state.effective_device_id().as_deref(), Some("client"));
     }
 
     #[test]
@@ -4048,6 +4138,7 @@ mod tests {
             "unknown device conservatively fails the gate"
         );
         s.devices = vec![Device {
+            role: None,
             id: "d1".into(),
             name: "laptop".into(),
             platform: "macos".into(),
@@ -4070,6 +4161,7 @@ mod tests {
         let mut state = AppState::default();
         state.devices = vec![
             Device {
+                role: None,
                 id: "personal".into(),
                 name: "personal".into(),
                 platform: "macos".into(),
@@ -4079,6 +4171,7 @@ mod tests {
                 capabilities: vec![zeron_proto::capabilities::MESSAGE_QUEUE_V1.into()],
             },
             Device {
+                role: None,
                 id: "upstream".into(),
                 name: "upstream".into(),
                 platform: "macos".into(),
@@ -4105,6 +4198,7 @@ mod tests {
         local.device_id = "local".into();
         s.chats = vec![remote, local];
         s.devices = vec![Device {
+            role: None,
             id: "remote".into(),
             name: "vps".into(),
             platform: "linux".into(),
