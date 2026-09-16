@@ -9,8 +9,10 @@ Verified interactively on Linux/X11:
 
 - First-open typing searches the palette, leaving the composer untouched.
 - Actions and chat metadata filter together; a chat-only match hides Actions.
-- Matching text uses the composer mention badge: rounded code wash, code text color, monospace font, and non-breaking side padding. This applies to action labels and chat metadata.
+- Matching text keeps a compact rounded code wash and code text color while preserving the row font and original text spacing. This applies to action labels and chat metadata.
 - The action/history divider spans the card; chat history has no heading.
+- Palette chat hover leaves the sidebar pixels unchanged (including Archive state).
+- Chat rows use the sidebar height calculation and 2px gap; action rows are 32px.
 - Up/Down wraps and scrolls the selected result into view; Enter opens it.
 - New chat, New project, and Open settings reach their respective screens.
 - New project no longer shows the Cmd+K chip.

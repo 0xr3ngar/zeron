@@ -2191,8 +2191,7 @@ mod tests {
     }
 }
 
-/// Query matches use the composer's mention badge recipe: monospace text,
-/// code_text over a rounded code_wash, with non-breaking side bearings.
+/// Compact mention-style match washes preserve the row's font and spacing.
 pub(crate) fn search_highlight(
     text: SharedString,
     query: Option<&str>,
@@ -2205,23 +2204,16 @@ pub(crate) fn search_highlight(
     if ranges.is_empty() {
         return text.into_any_element();
     }
-    let (display, badges) = search_badge_text(&text, ranges);
-    let styled = gpui::StyledText::new(display)
-        .with_highlights(badges.iter().cloned().map(|range| {
-            (
-                range,
-                gpui::HighlightStyle {
-                    color: Some(theme.code_text),
-                    ..Default::default()
-                },
-            )
-        }))
-        .with_font_family_overrides(
-            badges
-                .iter()
-                .cloned()
-                .map(|range| (range, theme.font_mono.clone())),
-        );
+    let badges = ranges;
+    let styled = gpui::StyledText::new(text).with_highlights(badges.iter().cloned().map(|range| {
+        (
+            range,
+            gpui::HighlightStyle {
+                color: Some(theme.code_text),
+                ..Default::default()
+            },
+        )
+    }));
     let layout = styled.layout().clone();
     let wash = theme.code_wash;
     // As in the composer, paint rounded backgrounds beneath shaped glyphs.
@@ -2230,10 +2222,10 @@ pub(crate) fn search_highlight(
         |_, _, _| (),
         move |_, _, window, _| {
             for range in &badges {
-                for bounds in crate::markdown::render::range_rects(&layout, range, 0.0, 2.0) {
+                for bounds in crate::markdown::render::range_rects(&layout, range, 1.0, 1.5) {
                     window.paint_quad(gpui::quad(
                         bounds,
-                        px(5.0),
+                        px(3.0),
                         wash,
                         px(0.0),
                         gpui::transparent_black(),
@@ -2250,26 +2242,6 @@ pub(crate) fn search_highlight(
         .child(underlay)
         .child(styled)
         .into_any_element()
-}
-
-fn search_badge_text(
-    text: &str,
-    ranges: Vec<std::ops::Range<usize>>,
-) -> (String, Vec<std::ops::Range<usize>>) {
-    let mut display = String::new();
-    let mut badges = Vec::new();
-    let mut at = 0;
-    for range in ranges {
-        display.push_str(&text[at..range.start]);
-        let start = display.len();
-        display.push('\u{00a0}');
-        display.push_str(&text[range.clone()]);
-        display.push('\u{00a0}');
-        badges.push(start..display.len());
-        at = range.end;
-    }
-    display.push_str(&text[at..]);
-    (display, badges)
 }
 
 fn search_match_ranges(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
@@ -2303,14 +2275,15 @@ fn search_match_ranges(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
 
 #[cfg(test)]
 mod search_highlight_tests {
-    use super::{search_badge_text, search_match_ranges};
+    use super::search_match_ranges;
 
     #[test]
-    fn badges_preserve_text_and_pad_only_matches() {
-        let text = "Fix CAFÉ redirects";
-        let (display, badges) = search_badge_text(text, search_match_ranges(text, "café"));
-        assert_eq!(display, "Fix \u{00a0}CAFÉ\u{00a0} redirects");
-        assert_eq!(&display[badges[0].clone()], "\u{00a0}CAFÉ\u{00a0}");
+    fn inline_matches_keep_adjacent_word_boundaries() {
+        let text = "fieldnotes/fix-authentication-redirects";
+        let ranges = search_match_ranges(text, "authentication");
+        assert_eq!(&text[..ranges[0].start], "fieldnotes/fix-");
+        assert_eq!(&text[ranges[0].clone()], "authentication");
+        assert_eq!(&text[ranges[0].end..], "-redirects");
     }
 
     #[test]

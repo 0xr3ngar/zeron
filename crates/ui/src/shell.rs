@@ -5486,7 +5486,14 @@ impl Shell {
         // relative time instead. Hovering the ROW swaps the corner for the
         // ARCHIVE button (UNARCHIVE on rows in the sidebar's archived
         // accordion), t3code's settle-on-hover.
-        let corner_hovered = self.chat_status_hover.as_deref() == Some(id.as_str());
+        // A chat can appear on both surfaces at once. Namespace every hover
+        // key and child id so the palette never animates the sidebar copy.
+        let row_id = if search_query.is_some() {
+            format!("palette-chat-{id}")
+        } else {
+            format!("chat-{id}")
+        };
+        let corner_hovered = self.chat_status_hover.as_deref() == Some(row_id.as_str());
         // Send-truth overrides: a send unadopted past the grace window is
         // FAILED (explicit, with the transcript's retry affordance); a send
         // whose delivery path is degraded is QUEUED, not Working — the
@@ -5600,7 +5607,7 @@ impl Shell {
                             .into_any_element()
                     } else if working {
                         loaders::mini_glyph_spinner(
-                            format!("chat-working-{id}"),
+                            format!("{row_id}-working"),
                             2.0,
                             theme.glyph,
                             self.sidebar_pane.entity_id(),
@@ -5645,7 +5652,7 @@ impl Shell {
         let corner: AnyElement = {
             let archive_id = id.clone();
             div()
-                .id(SharedString::from(format!("chat-corner-{id}")))
+                .id(SharedString::from(format!("{row_id}-corner")))
                 .flex_none()
                 // Pin the corner to line 1's text height so the archive pill
                 // (taller, padded) overflows vertically instead of growing the
@@ -5675,7 +5682,7 @@ impl Shell {
         let menu_id = id.clone();
         // Hover fades over transition-colors (zeron session-row.tsx) — both
         // the wash and the title brighten ride the same 150ms blend.
-        let fade_key = format!("chat-row-{id}");
+        let fade_key = format!("{row_id}-hover");
         let rest_bg = if selected {
             selected_wash
         } else {
@@ -5688,7 +5695,11 @@ impl Shell {
         let hover_bg = if selected { selected_wash } else { hover };
         let rest_text = if selected { text } else { text.opacity(0.8) };
         div()
-            .id(SharedString::from(format!("chat-{id}")))
+            .id(SharedString::from(row_id.clone()))
+            .h(px(chat_row_height(
+                branch.is_some(),
+                change_request.is_some(),
+            )))
             .flex()
             .flex_col()
             .gap(px(2.0))
@@ -5704,7 +5715,7 @@ impl Shell {
             // hover listener per element).
             .on_hover({
                 let fade_hover = motion::hover_listener(fade_key.clone());
-                let hover_id = id.clone();
+                let hover_id = row_id.clone();
                 cx.listener(move |this, hovered: &bool, window, cx| {
                     fade_hover(hovered, window, cx);
                     if *hovered {
@@ -5815,7 +5826,7 @@ impl Shell {
                         .child(div().flex_1().min_w_0())
                         .when_some(change_request, |el, summary| {
                             el.child(crate::change_requests::pull_request_badge_with_query(
-                                format!("chat-pr-{id}").into(),
+                                format!("{row_id}-pr").into(),
                                 summary,
                                 crate::change_requests::ChangeRequestBadgeSurface::Sidebar,
                                 search_query,

@@ -177,7 +177,7 @@ impl Shell {
                 let entry = entry.clone();
                 popover::menu_row(&theme, ix == active, format!("command-action-{ix}"))
                     .id(("command-action", ix))
-                    .h(px(38.0))
+                    .h(px(32.0))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_command(entry.clone(), window, cx)
                     }))
@@ -250,7 +250,7 @@ impl Shell {
             .py(px(8.0))
             .flex()
             .flex_col()
-            .gap(px(2.0))
+            .gap(px(SIDEBAR_LIST_GAP))
             .children(rows)
             .when(entries.is_empty(), |el| {
                 el.child(
