@@ -204,12 +204,19 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center()
-            .size(px(30.0))
-            .rounded(px(8.0))
-            .text_size(crate::typography::ui_rems(12.0))
-            .text_color(theme.text_muted)
+            .h(px(20.0))
+            .gap(px(5.0))
+            .px(px(7.0))
+            .rounded(px(6.0))
+            .bg(theme.text_muted.opacity(0.08))
+            .text_size(px(11.0))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.text_muted.opacity(0.85))
             .cursor_pointer()
-            .hover(|s| s.bg(crate::theme::ink(0.05)).text_color(theme.text))
+            .hover(|s| {
+                s.bg(theme.text_muted.opacity(0.16))
+                    .text_color(theme.text_muted)
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| {
@@ -226,8 +233,14 @@ impl Shell {
             }))
             .child(
                 icon(icons::CHAT_ROUND_LINE)
-                    .size(px(14.0))
-                    .text_color(theme.text_muted),
+                    .size(px(11.0))
+                    .flex_none()
+                    .text_color(theme.text_muted.opacity(0.85)),
+            )
+            .child(
+                div()
+                    .font_family(theme.font_mono.clone())
+                    .child(chats.len().to_string()),
             );
         if self.side_chat_history_popup.get().is_some() {
             let mut list = div()
@@ -299,8 +312,12 @@ impl Shell {
         }
         div()
             .absolute()
-            .bottom(px(16.0))
-            .right(px(16.0))
+            // Match the composer's footer row, including its negative bottom margin.
+            .bottom(px(Theme::SPACE_LG - Theme::SPACE_SM))
+            .h(px(crate::composer::SESSION_FOOTER_HEIGHT))
+            .flex()
+            .items_center()
+            .right(px(Theme::SPACE_LG))
             .child(trigger)
             .into_any_element()
     }
