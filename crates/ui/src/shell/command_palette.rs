@@ -164,7 +164,7 @@ impl Shell {
         let query = search.read(cx).text().to_string();
         let focus = palette.focus.clone();
         let scroll = palette.scroll.clone();
-        let theme = Theme::of(cx).clone();
+        let theme = Theme::of(cx).for_popup();
         let action_count = entries.iter().take_while(|e| e.action().is_some()).count();
         let mut rows = Vec::new();
         for (ix, entry) in entries.iter().enumerate() {

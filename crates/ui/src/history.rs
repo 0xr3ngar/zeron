@@ -3189,6 +3189,7 @@ impl GitHistory {
     }
 
     fn render_author_menu(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &theme.for_popup();
         let show_name = configured_author_display(cx) == GitHistoryAuthorDisplay::Name;
         popover::popover_card(theme)
             .w(px(116.0))
@@ -3224,6 +3225,7 @@ impl GitHistory {
     }
 
     fn render_column_menu(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &theme.for_popup();
         let columns = configured_columns(cx);
         let widths = configured_column_widths(cx);
         let order = configured_column_order(cx);

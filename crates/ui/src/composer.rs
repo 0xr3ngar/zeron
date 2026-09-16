@@ -3732,6 +3732,14 @@ impl gpui::Element for ComposerTextElement {
 impl Render for ComposerInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
+        let popup_theme = theme.for_popup();
+        let theme = if self.key_context == "PaletteSearch"
+            || self.accessibility_role == gpui::Role::SearchInput
+        {
+            &popup_theme
+        } else {
+            theme
+        };
         let text_color = if self.content.is_empty() {
             theme.text_faint
         } else {
@@ -5194,6 +5202,7 @@ impl Composer {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
+        let theme = &theme.for_popup();
         let token = self.mention.token.as_ref()?;
         let mut card = crate::popover::popover_card(theme)
             .w_full()
@@ -5507,6 +5516,7 @@ impl Composer {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
+        let theme = &theme.for_popup();
         // Only while a slash token is active.
         self.slash.token.as_ref()?;
         let commands = self
