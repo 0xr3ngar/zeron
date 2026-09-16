@@ -2222,7 +2222,10 @@ pub(crate) fn search_highlight(
         |_, _, _| (),
         move |_, _, window, _| {
             for range in &badges {
-                for bounds in crate::markdown::render::range_rects(&layout, range, 1.0, 1.5) {
+                for mut bounds in crate::markdown::render::range_rects(&layout, range, 1.0, 1.5) {
+                    // Glyphs sit below the line box's optical center. Shift the
+                    // wash down half a logical pixel to balance visible top/bottom padding.
+                    bounds.origin.y += px(0.5);
                     window.paint_quad(gpui::quad(
                         bounds,
                         px(3.0),
