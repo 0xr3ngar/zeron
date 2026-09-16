@@ -296,37 +296,34 @@ pub fn classify_key(key: &str, cmd: bool, ctrl: bool) -> MenuKey {
 // ---------------------------------------------------------------------------
 
 /// The floating-menu surface (zeron `.glass-surface` + `menuSurface`):
-/// `rounded-xl border border-white/[0.1] p-1` over the frosted glass tint —
-/// the real recipe now that the fork paints backdrop blur: the
-/// [`Theme::glass_overlay`] tint (`oklch(0.33 0 0 / 34%)` on dark) over the
-/// [`crate::frost::MENU_BLUR`] blur from the mount helpers below, plus the
-/// same hairline + baked-in shadow. Opaque platforms keep the near-opaque
-/// tone the reference composites to on the dark panels (~#161616).
-/// Corner radius of every floating card. The frost wrapper masks its backdrop
-/// blur to the same value, so the two must agree.
+/// Shared floating surface used by palettes, popovers, dropdowns and menus.
+/// Mount helpers supply the same 16px backdrop blur as the composer.
+/// Corner radius must match the frost wrapper's mask.
 pub const CARD_RADIUS: f32 = 12.0;
 
 /// The `p-1` inset of [`popover_card`] that [`menu_scroll_host`] /
 /// [`menu_scroll_list`] cancel for card-bleeding scroll hosts.
 pub const CARD_INSET: f32 = 4.0;
 
+pub fn surface_bg(theme: &Theme) -> gpui::Hsla {
+    if theme.is_frost() {
+        theme.composer_sidebar_tint()
+    } else {
+        theme.input_glass_bg()
+    }
+}
+
 pub fn popover_card(theme: &Theme) -> gpui::Div {
-    let card = div()
+    div()
         .border_1()
-        .border_color(hairline(0.10))
+        .border_color(theme.border)
         .rounded(px(CARD_RADIUS))
-        .shadow_lg()
+        .when(!theme.is_frost(), |el| el.shadow_lg())
+        .bg(surface_bg(theme))
         .p(px(CARD_INSET))
         .overflow_hidden()
         .text_size(crate::typography::ui_rems(13.0))
-        .text_color(theme.text);
-    if theme.is_frost() {
-        // Translucent tint — the backdrop blur beneath it comes from the
-        // [`crate::frost::frosted`] wrapper at the mount helpers below.
-        card.bg(theme.glass_overlay())
-    } else {
-        card.bg(theme.surface_overlay)
-    }
+        .text_color(theme.text)
 }
 
 /// [`popover_card`] without the `p-1` inset — for popovers that manage their
@@ -850,11 +847,7 @@ pub fn palette_card(theme: &Theme, width: Pixels, corner_radius: f32) -> gpui::D
         .rounded(px(corner_radius))
         .border_1()
         .border_color(hairline(0.10))
-        .bg(if theme.is_frost() {
-            theme.glass_overlay()
-        } else {
-            theme.surface_overlay
-        })
+        .bg(surface_bg(theme))
         .shadow_lg()
         .overflow_hidden()
         .flex()
@@ -1026,7 +1019,7 @@ pub fn dialog_card(theme: &Theme) -> gpui::Div {
         .w(px(360.0))
         .p(px(20.0))
         .rounded(px(16.0))
-        .bg(theme.surface_dialog)
+        .bg(surface_bg(theme))
         .border_1()
         .border_color(hairline(0.10))
         .shadow_lg()

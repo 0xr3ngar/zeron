@@ -306,11 +306,7 @@ impl Shell {
             .border_1()
             .border_color(theme.border)
             .when(!theme.is_frost(), |el| el.shadow_lg())
-            .bg(if theme.is_frost() {
-                theme.composer_sidebar_tint()
-            } else {
-                theme.input_glass_bg()
-            })
+            .bg(popover::surface_bg(&theme))
             .text_color(theme.text)
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
@@ -400,7 +396,7 @@ impl Shell {
                     .child(popover::key_hint_text(&theme, "esc", "Close")),
             );
         // Match the composer's 16px backdrop blur, including its opaque fallback.
-        let card = crate::frost::frosted(14.0, 16.0, card);
+        let card = crate::frost::frosted(14.0, crate::frost::MENU_BLUR, card);
         Some(
             gpui::deferred(
                 gpui::anchored()

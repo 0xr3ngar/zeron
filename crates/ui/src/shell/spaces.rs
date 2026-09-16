@@ -2710,11 +2710,7 @@ impl Shell {
                 .border_1()
                 .border_color(theme.border)
                 .when(!theme.is_frost(), |el| el.shadow_lg())
-                .bg(if theme.is_frost() {
-                    theme.composer_sidebar_tint()
-                } else {
-                    theme.input_glass_bg()
-                })
+                .bg(popover::surface_bg(&theme))
                 .text_color(theme.text)
                 .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                     this.add_space_key(event, cx)
@@ -2748,7 +2744,7 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(crate::frost::frosted(14.0, 16.0, card)),
+                            .child(crate::frost::frosted(14.0, crate::frost::MENU_BLUR, card)),
                     ),
             )
             .priority(2)
