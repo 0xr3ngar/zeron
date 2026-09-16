@@ -2648,11 +2648,7 @@ impl Shell {
             .gap(px(12.0))
             .border_b_1()
             .border_color(theme.border)
-            .child(
-                icon(icons::MAGNIFER)
-                    .size(px(16.0))
-                    .text_color(theme.text_muted),
-            )
+            .child(popover::palette_search_icon(&theme))
             .child(
                 div()
                     .flex_1()

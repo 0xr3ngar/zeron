@@ -862,6 +862,25 @@ pub fn palette_card(theme: &Theme, width: Pixels, corner_radius: f32) -> gpui::D
         .text_color(theme.text)
 }
 
+/// A compact search glyph in a stable header slot. The slight optical offset
+/// balances the magnifier's upper-left lens against its lower-right handle.
+pub fn palette_search_icon(theme: &Theme) -> gpui::Div {
+    div()
+        .size(px(20.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            crate::icons::icon(crate::icons::MAGNIFER)
+                .size(px(16.0))
+                .relative()
+                .left(px(0.5))
+                .top(px(0.5))
+                .text_color(theme.text_muted),
+        )
+}
+
 /// One footer key-cap (22px, rounded-5, `white/[0.05]`) holding arbitrary
 /// children — the base of [`key_hint`]/[`key_hint_pair`] and the search-bar
 /// chips ("⌘K", "esc").
