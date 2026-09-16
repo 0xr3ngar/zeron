@@ -395,8 +395,8 @@ impl FlipMorph {
 pub const CLUSTER_Y_DELTA: f32 = 2.5;
 
 /// Send's right inset differs between compact (8px) and expanded (12px).
-/// Glide this four-pixel shift during the morph. The attachment/model group
-/// stays anchored to the left edge in both layouts.
+/// Glide this four-pixel shift during the morph. Attachment stays on the
+/// left; the model picker slides between the left and right groups.
 pub const CLUSTER_X_DELTA: f32 = 4.0;
 /// Optical join between the picker group and the paperclip. This is tighter
 /// than the structural spacing ladder because the narrow paperclip glyph
@@ -4116,6 +4116,10 @@ pub struct Composer {
     /// Pill height actually rendered last frame — a committed flip morphs
     /// from here, so mid-flight reversals hand off without a jump.
     last_rendered_height: f32,
+    model_slide_position: f32,
+    model_slide_from: f32,
+    model_slide_morph: Option<FlipMorph>,
+    model_bounds: Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
     dock_frame: Option<crate::composer_dock::DockFrame>,
     /// The shared clock owns this frame's height, including its final step.
     dock_height_changed: bool,
@@ -4314,6 +4318,10 @@ impl Composer {
             settle_task: None,
             flip_morph: None,
             last_rendered_height: 0.0,
+            model_slide_position: 1.0,
+            model_slide_from: 1.0,
+            model_slide_morph: None,
+            model_bounds: Default::default(),
             dock_frame: None,
             dock_height_changed: false,
             dock_clearance_correction: 0.0,
@@ -7614,6 +7622,60 @@ impl Render for Composer {
         // (round-9 follow-up: the send/attach/chips must not ride the height,
         // and none of them fade — the full cluster stays visible throughout).
         let cluster_dy = morph_cluster_dy(layout_morph_t);
+        // Share the height/route timeline instead of starting an independent
+        // animation. Reversals begin at the last visible horizontal position.
+        if self.model_slide_morph != self.flip_morph {
+            self.model_slide_from = self.model_slide_position;
+            self.model_slide_morph = self.flip_morph;
+        }
+        let compact_target = if expanded { 0.0 } else { 1.0 };
+        self.model_slide_position =
+            if self.dock_frame.is_some_and(|frame| frame.active) && !session_expanded {
+                dock_amount
+            } else {
+                self.flip_morph.map_or(compact_target, |morph| {
+                    motion::lerp(
+                        self.model_slide_from,
+                        compact_target,
+                        morph.progress(now_ms),
+                    )
+                })
+            };
+        let surface_width = self
+            .surface_bounds
+            .get()
+            .map_or(strip_width_hint + PILL_BORDER_V, |bounds| {
+                f32::from(bounds.size.width)
+            });
+        let model_travel = (surface_width
+            - PILL_BORDER_V
+            - 12.0
+            - 28.0
+            - ACTION_UTILITY_GAP
+            - self
+                .model_bounds
+                .get()
+                .map_or(0.0, |bounds| f32::from(bounds.size.width))
+            - ACTION_PRIMARY_GAP
+            - 28.0
+            - morph_cluster_inset(expanded, layout_morph_t))
+        .max(0.0);
+        let model_offset = (self.model_slide_position - compact_target) * model_travel;
+        let measured_model_bounds = self.model_bounds.clone();
+        let model_picker = div()
+            .min_w_0()
+            .max_w(px(surface_width * 0.45))
+            .relative()
+            .left(px(model_offset))
+            .child(self.pickers.clone())
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| measured_model_bounds.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            );
         let body = if expanded {
             // Expanded: textarea on top (`px-4 pb-1 pt-4`), actions row
             // (`px-3 pb-2.5 pt-1`, h-8 chips → 46px) ABSOLUTE at the pill's
@@ -7669,13 +7731,13 @@ impl Render for Composer {
                                 .items_center()
                                 .gap(px(ACTION_UTILITY_GAP))
                                 .child(attach)
-                                .child(self.pickers.clone()),
+                                .child(model_picker),
                         )
                         .child(send_button),
                 )
         } else {
-            // Compact pill: attachment/model on the left, the input filling
-            // the middle, and Send on the right, all on one 47px line.
+            // Compact pill: attachment on the left, input in the middle,
+            // then model and Send on the right, all on one 47px line.
             // The row is BOTTOM-justified: during the collapse morph the pill
             // top sweeps down over a stationary row, the text walks down from
             // its expanded resting place via a decaying relative offset, and
@@ -7705,17 +7767,11 @@ impl Render for Composer {
                         .items_center()
                         .child(
                             div()
-                                .min_w_0()
-                                .max_w(gpui::relative(0.45))
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(ACTION_UTILITY_GAP))
+                                .flex_none()
                                 .pl(px(12.0))
                                 .relative()
                                 .top(px(-cluster_dy))
-                                .child(attach)
-                                .child(self.pickers.clone()),
+                                .child(attach),
                         )
                         .child(
                             div()
@@ -7728,7 +7784,16 @@ impl Render for Composer {
                         )
                         .child(
                             div()
+                                .min_w_0()
+                                .max_w(px(surface_width * 0.45))
+                                .relative()
+                                .top(px(-cluster_dy))
+                                .child(model_picker),
+                        )
+                        .child(
+                            div()
                                 .flex_none()
+                                .pl(px(ACTION_PRIMARY_GAP))
                                 .pr(px(morph_cluster_inset(false, layout_morph_t)))
                                 .relative()
                                 .top(px(-cluster_dy))
@@ -7969,6 +8034,13 @@ mod tests {
                     let origin = input.read(cx).last_bounds.unwrap().origin;
                     assert!((f32::from(origin.y - surface.top()) - (17.0 - 4.0 * amount)).abs() <= 1.0,
                         "editor jumped: docked={docked}, amount={amount}, origin={origin:?}, surface={surface:?}");
+                    let model = composer.model_bounds.get().unwrap();
+                    let left = surface.left() + px(1.0 + 12.0 + 28.0 + ACTION_UTILITY_GAP);
+                    let travel = surface.size.width - px(2.0 + 12.0 + 28.0 + ACTION_UTILITY_GAP
+                        + ACTION_PRIMARY_GAP + 28.0 + motion::lerp(12.0, 8.0, amount)) - model.size.width;
+                    let expected_x = left + travel * amount;
+                    assert!((f32::from(model.left() - expected_x)).abs() <= 1.0,
+                        "model jumped: docked={docked}, amount={amount}, actual={model:?}, expected={expected_x:?}");
                     let expected = if docked { COMPACT_TOTAL_HEIGHT } else { COMPOSER_MIN_HEIGHT };
                     assert!((composer.last_rendered_height + composer.dock_clearance_correction - expected).abs() < 0.1);
                     assert!((composer.last_rendered_height - motion::lerp(COMPOSER_MIN_HEIGHT, COMPACT_TOTAL_HEIGHT, amount)).abs() < 0.1);
