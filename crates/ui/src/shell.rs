@@ -59,6 +59,7 @@ use crate::theme::Theme;
 use crate::transcript::{self, Transcript, TranscriptEvent};
 use crate::workspace_links::resolve_workspace_file_link;
 
+mod command_palette;
 mod spaces;
 mod tabs;
 
@@ -71,6 +72,7 @@ actions!(
         ToggleSidebar,
         ToggleChanges,
         AddSpacePalette,
+        ToggleCommandPalette,
         NewSession,
         OpenSettings,
         NextSession,
@@ -365,9 +367,9 @@ pub fn apply_keymap(
             ArchiveSession,
             None,
         ),
-        // Fixed: ⌘K summons the add-space palette (the ⌘K chip in its search
-        // bar); pressing it again dismisses.
-        KeyBinding::new(&platform_combo("mod-k"), AddSpacePalette, None),
+        // Fixed: ⌘K summons the command palette.
+        // Pressing it again dismisses.
+        KeyBinding::new(&platform_combo("mod-k"), ToggleCommandPalette, None),
     ]);
     crate::browser::bind_keys(cx, keymap);
     // ⌘1..⌘9 open the sidebar's first nine rows. A slot left unbound (an empty
@@ -1393,9 +1395,10 @@ pub struct Shell {
     rename_space_dialog: Option<RenameSpaceDialog>,
     /// Space id awaiting delete confirmation (hard delete + session cascade).
     delete_space_confirm: Option<String>,
-    /// The add-space palette (⌘K-style; device tabs + folder search), `Some`
+    /// The add-space palette (device tabs + folder search), `Some`
     /// while open.
     add_space: Option<AddSpaceFlow>,
+    command_palette: Option<command_palette::CommandPalette>,
     /// The sidebar's space-filter dropdown.
     spaces_menu: popover::Popup<spaces::SpacesMenu>,
     /// Hover/drag + scroll-linger state of the dropdown's floating rail.
@@ -1756,6 +1759,7 @@ impl Shell {
             rename_space_dialog: None,
             delete_space_confirm: None,
             add_space: None,
+            command_palette: None,
             spaces_menu: popover::Popup::default(),
             spaces_menu_bar: popover::MenuScrollbarState::default(),
             sidebar_view_menu: popover::Popup::default(),
@@ -3592,6 +3596,7 @@ impl Shell {
     }
 
     fn open_settings(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        self.command_palette = None;
         // Recreate per visit: the page's ListHarnesses load re-probes which
         // CLIs are installed, so installing one shows up on the next open.
         if section == SettingsSection::Harnesses {
@@ -3995,7 +4000,9 @@ impl Shell {
     /// so an unguarded jump would switch sessions UNDER the open popover,
     /// stranding it over a session the user never picked.
     pub(super) fn overlay_owns_keyboard(&self, cx: &App) -> bool {
-        self.add_space.is_some() || self.composer.read(cx).pickers().read(cx).is_open()
+        self.command_palette.is_some()
+            || self.add_space.is_some()
+            || self.composer.read(cx).pickers().read(cx).is_open()
     }
 
     /// Track held modifiers for sidebar jump hints and the queue's submit hint.
@@ -6852,9 +6859,14 @@ impl Shell {
     fn on_key_down_capture(
         &mut self,
         event: &gpui::KeyDownEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape" && self.command_palette.is_some() {
+            self.close_command_palette(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key == "escape" && self.capture_escape_surface(cx) {
             cx.stop_propagation();
         }
@@ -7135,6 +7147,9 @@ impl Shell {
         }
 
         overlays.extend(self.render_space_overlays(viewport, window, cx));
+        if let Some(overlay) = self.render_command_palette(viewport, window, cx) {
+            overlays.push(overlay);
+        }
         if let Some(overlay) = self.render_add_space_overlay(viewport, window, cx) {
             overlays.push(overlay);
         }
@@ -9725,6 +9740,9 @@ impl Render for Shell {
             .on_modifiers_changed(
                 cx.listener(|this, event, _, cx| this.on_modifiers_changed(event, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
+                this.toggle_command_palette(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &AddSpacePalette, _, cx| {
                 if this.add_space.is_some() {
                     this.add_space = None;
