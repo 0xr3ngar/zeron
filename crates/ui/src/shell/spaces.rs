@@ -2479,81 +2479,166 @@ impl Shell {
                     .child("Loading locations…"),
             );
         }
-        let crumb = |id: SharedString, name: SharedString| {
+        let crumb =
+            |id: SharedString, name: SharedString, glyph: Option<&'static str>, current: bool| {
+                div()
+                    .id(id)
+                    .h(px(26.0))
+                    .px(px(7.0))
+                    .rounded(px(6.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .cursor_pointer()
+                    .text_color(if current {
+                        theme.text
+                    } else {
+                        theme.text_muted
+                    })
+                    .when(current, |el| el.bg(theme.element_hover))
+                    .hover(|s| s.bg(theme.element_hover).text_color(theme.text))
+                    .when_some(glyph, |el, glyph| {
+                        el.child(
+                            icon(glyph)
+                                .size(px(14.0))
+                                .flex_none()
+                                .text_color(if current {
+                                    theme.text
+                                } else {
+                                    theme.text_muted
+                                }),
+                        )
+                    })
+                    .child(div().max_w(px(140.0)).truncate().child(name))
+            };
+        // Keep each chevron with its destination when a long path wraps.
+        let segment = |item: gpui::Stateful<gpui::Div>| {
             div()
-                .id(id)
-                .px(px(4.0))
-                .py(px(3.0))
-                .rounded(px(4.0))
-                .cursor_pointer()
-                .text_color(theme.text_muted)
-                .hover(|s| s.bg(theme.element_hover).text_color(theme.text))
-                .child(name)
+                .flex()
+                .items_center()
+                .gap(px(2.0))
+                .child(
+                    icon(icons::ALT_ARROW_RIGHT)
+                        .size(px(12.0))
+                        .text_color(theme.text_faint),
+                )
+                .child(item)
         };
-        let separator = || div().text_color(theme.text_faint).child("/");
-        let mut crumbs = div()
-            .px(px(14.0))
-            .py(px(8.0))
+        let mut trail = div()
+            .flex_1()
+            .min_w_0()
             .flex()
             .flex_wrap()
             .items_center()
-            .gap(px(4.0))
-            .text_size(crate::typography::ui_rems(11.0))
+            .gap(px(2.0))
             .child(
-                div()
-                    .id("project-crumb-search")
-                    .p(px(4.0))
-                    .rounded(px(4.0))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.element_hover))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.add_space = None;
-                        this.toggle_command_palette(window, cx);
-                    }))
-                    .child(
-                        icon(icons::MAGNIFER)
-                            .size(px(16.0))
-                            .text_color(theme.text_muted),
-                    ),
-            )
-            .child(separator())
-            .child(
-                crumb("project-crumb-root".into(), "New project".into()).on_click(
+                crumb(
+                    "project-crumb-root".into(),
+                    "New project".into(),
+                    None,
+                    step == ProjectStep::Devices,
+                )
+                .on_click(
                     cx.listener(|this, _, _, cx| this.add_space_back_to(ProjectStep::Devices, cx)),
                 ),
             );
         if let Some(device) = device {
-            crumbs =
-                crumbs.child(separator()).child(
-                    crumb("project-crumb-device".into(), device.name.into()).on_click(cx.listener(
-                        |this, _, _, cx| this.add_space_back_to(ProjectStep::Locations, cx),
-                    )),
-                );
+            let glyph = match device.platform.as_str() {
+                "macos" | "darwin" => icons::LAPTOP,
+                "ios" | "android" => icons::SMARTPHONE,
+                _ => icons::MONITOR,
+            };
+            trail =
+                trail.child(segment(
+                    crumb(
+                        "project-crumb-device".into(),
+                        device.name.into(),
+                        Some(glyph),
+                        step == ProjectStep::Locations,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.add_space_back_to(ProjectStep::Locations, cx)
+                    })),
+                ));
         }
         if let Some((name, path)) = location {
+            let glyph = if path.is_none() {
+                icons::HOME
+            } else {
+                icons::HARD_DRIVE
+            };
             let root = path.clone().or(home);
-            crumbs = crumbs.child(separator()).child(
-                crumb("project-crumb-location".into(), name.clone().into()).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.add_space_goto_location(name.clone(), path.clone(), cx)
-                    },
-                )),
-            );
+            let at_root = listing
+                .as_ref()
+                .is_none_or(|l| root.as_deref() == Some(l.path.as_str()));
+            trail = trail.child(segment(
+                crumb(
+                    "project-crumb-location".into(),
+                    name.clone().into(),
+                    Some(glyph),
+                    at_root,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.add_space_goto_location(name.clone(), path.clone(), cx)
+                })),
+            ));
             if let Some(listing) = listing.as_ref() {
                 for (ix, (name, full)) in breadcrumbs(&listing.path).into_iter().enumerate() {
                     if root.as_deref().is_some_and(|root| path_under(root, &full)) {
                         continue;
                     }
-                    crumbs = crumbs.child(separator()).child(
-                        crumb(format!("project-crumb-folder-{ix}").into(), name.into()).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                this.add_space_descend(full.clone(), false, cx)
-                            }),
-                        ),
-                    );
+                    trail = trail.child(segment(
+                        crumb(
+                            format!("project-crumb-folder-{ix}").into(),
+                            name.into(),
+                            Some(icons::FOLDER),
+                            full == listing.path,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.add_space_descend(full.clone(), false, cx)
+                        })),
+                    ));
                 }
             }
         }
+        let crumbs = div()
+            .px(px(14.0))
+            .py(px(8.0))
+            .flex()
+            .items_start()
+            .gap(px(8.0))
+            .text_size(crate::typography::ui_rems(12.0))
+            .child(
+                div()
+                    .id("project-crumb-back")
+                    .size(px(26.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .text_color(theme.text_muted)
+                    .hover(|s| s.bg(theme.element_hover).text_color(theme.text))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.add_space = None;
+                        this.toggle_command_palette(window, cx);
+                    }))
+                    .child(
+                        icon(icons::ARROW_LEFT)
+                            .size(px(16.0))
+                            .text_color(theme.text_muted),
+                    ),
+            )
+            .child(
+                div()
+                    .w(px(1.0))
+                    .h(px(16.0))
+                    .mt(px(5.0))
+                    .flex_none()
+                    .bg(theme.border),
+            )
+            .child(trail);
         let header = div()
             .h(px(58.0))
             .flex_none()
