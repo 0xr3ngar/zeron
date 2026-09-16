@@ -930,8 +930,8 @@ impl Theme {
         let mut popup = self.clone();
         if self.is_frost() {
             let (secondary, hint) = match self.appearance {
-                Appearance::Dark => (0.78, 0.68),
-                Appearance::Light => (0.34, 0.43),
+                Appearance::Dark => (0.64, 0.53),
+                Appearance::Light => (0.46, 0.56),
             };
             popup.text_muted = hsla(self.text.h, self.text.s, secondary, 1.0);
             popup.text_faint = hsla(self.text.h, self.text.s, hint, 1.0);
@@ -2752,11 +2752,11 @@ mod tests {
             assert_eq!(popup.text, theme.text);
             match theme.appearance {
                 Appearance::Dark => {
-                    assert!(popup.text.l - popup.text_muted.l >= 0.10);
+                    assert!(popup.text.l - popup.text_muted.l >= 0.22);
                     assert!(popup.text_muted.l - popup.text_faint.l >= 0.08);
                 }
                 Appearance::Light => {
-                    assert!(popup.text_muted.l - popup.text.l >= 0.10);
+                    assert!(popup.text_muted.l - popup.text.l >= 0.22);
                     assert!(popup.text_faint.l - popup.text_muted.l >= 0.08);
                 }
             }
