@@ -388,11 +388,10 @@ impl FlipMorph {
 // expanded, a bottom-justified row when compact) and only the TEXT glides
 // with the sweeping top edge. The helpers below are the pure math.
 
-/// Send/attach center sits 27px above the pill's outer bottom in expanded
-/// mode (`pb-2.5` 10 + half the 32px content zone + 1px hairline) but 24.5px
-/// in compact (centered in the 47px row) — an inherent 2.5px delta between
-/// the two SOURCE geometries. The morph glides it instead of snapping.
-pub const CLUSTER_Y_DELTA: f32 = 2.5;
+/// Send/attach center sits 29px above the expanded pill's bottom (12px
+/// padding + half the 32px control zone + 1px border), versus 24.5px in
+/// compact. The morph glides this optical adjustment instead of snapping.
+pub const CLUSTER_Y_DELTA: f32 = 4.5;
 
 /// Send's right inset differs between compact (8px) and expanded (12px).
 /// Glide this four-pixel shift during the morph. Attachment stays on the
@@ -444,10 +443,8 @@ pub fn collapse_text_glide(from: f32, progress: f32) -> f32 {
 }
 
 /// The decaying [`CLUSTER_Y_DELTA`] offset for the in-flight morph.
-/// The whole control cluster — chips AND attach/send — rides the stationary
-/// bottom anchor at FULL alpha throughout (round-9 follow-up: any fade on the
-/// picker chips read as flicker; their screen position is near-stationary
-/// across the flip, so nothing needs to be hidden).
+/// Controls share this bottom anchor; the model's horizontal fade is applied
+/// independently so its endpoint matches Attachment and Send.
 pub fn morph_cluster_dy(progress: f32) -> f32 {
     CLUSTER_Y_DELTA * (1.0 - progress)
 }
@@ -7691,9 +7688,9 @@ impl Render for Composer {
             );
         let body = if expanded {
             // Expanded: textarea on top (`px-4 pb-1 pt-4`), actions row
-            // (`px-3 pb-2.5 pt-1`, h-8 chips → 46px) ABSOLUTE at the pill's
+            // (12px bottom + 2px top, 32px chips → 46px) ABSOLUTE at the pill's
             // stationary bottom — constant screen-y through the morph, with
-            // the 2.5px compact↔expanded centering delta gliding out. The
+            // the 4.5px compact↔expanded centering delta gliding out. The
             // text viewport follows the animated height so it cannot paint
             // over the controls. Its width stays fixed (no tween rewraps);
             // top padding eases 12→16. Attachment and Send stay on the bottom
@@ -7732,8 +7729,8 @@ impl Render for Composer {
                         .gap(px(ACTION_PRIMARY_GAP))
                         .pl(px(12.0))
                         .pr(px(morph_cluster_inset(true, layout_morph_t)))
-                        .pt(px(4.0))
-                        .pb(px(10.0))
+                        .pt(px(2.0))
+                        .pb(px(12.0))
                         .child(
                             div()
                                 .flex_1()
@@ -7753,7 +7750,7 @@ impl Render for Composer {
             // The row is BOTTOM-justified: during the collapse morph the pill
             // top sweeps down over a stationary row, the text walks down from
             // its expanded resting place via a decaying relative offset, and
-            // attachment/Send hold their spots (2.5px centering delta gliding
+            // attachment/Send hold their spots (4.5px centering delta gliding
             // in), with the model handoff sharing that same timeline.
             let text_glide = if self.dock_frame.is_some_and(|frame| frame.active) {
                 collapse_text_glide(dock_height(0.0), dock_amount)
@@ -9248,7 +9245,7 @@ mod tests {
         assert_eq!(collapse_text_glide(124.0, 1.0), 0.0);
         // At the commit instant the pieces start from the OLD mode's resting
         // geometry: text pad at the compact 12px inset, cluster displaced by
-        // exactly the 2.5px centering delta.
+        // exactly the 4.5px centering delta.
         assert_eq!(morph_text_pad(0.0), 12.0);
         assert_eq!(morph_cluster_dy(0.0), CLUSTER_Y_DELTA);
         // Collapse glide: starts where the expanded text sat (17px below the
