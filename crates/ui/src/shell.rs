@@ -8285,23 +8285,6 @@ impl Shell {
                     .flex_col()
                     .gap(px(8.0))
                     .child(
-                        row(
-                            "surface-card-side-chat",
-                            icons::CHAT_ROUND_LINE,
-                            if self.side_chat_creating {
-                                "Creating side chat…"
-                            } else {
-                                "Side chat"
-                            },
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.create_side_chat(cx))),
-                    )
-                    .children(
-                        self.side_chat_error
-                            .clone()
-                            .map(|error| div().text_color(theme.text_muted).child(error)),
-                    )
-                    .child(
                         row("surface-card-files", icons::FOLDER_WITH_FILES, "Files").on_click(
                             cx.listener(|this, _, window, cx| {
                                 this.add_files_surface(window, cx);
@@ -8319,6 +8302,23 @@ impl Shell {
                                 this.add_terminal_surface(cx);
                             }),
                         ),
+                    )
+                    .child(
+                        row(
+                            "surface-card-side-chat",
+                            icons::CHAT_ROUND_LINE,
+                            if self.side_chat_creating {
+                                "Creating side chat…"
+                            } else {
+                                "Side chat"
+                            },
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.create_side_chat(cx))),
+                    )
+                    .children(
+                        self.side_chat_error
+                            .clone()
+                            .map(|error| div().text_color(theme.text_muted).child(error)),
                     )
                     // Git surfaces only where there IS git — the pane itself
                     // no longer gates on it (terminals work anywhere).
