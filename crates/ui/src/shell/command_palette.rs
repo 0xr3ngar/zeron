@@ -361,7 +361,7 @@ impl Shell {
                     .border_color(theme.border)
                     .child(
                         icon(icons::MAGNIFER)
-                            .size(px(20.0))
+                            .size(px(16.0))
                             .text_color(theme.text_muted),
                     )
                     .child(
