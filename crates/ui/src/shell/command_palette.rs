@@ -1,6 +1,8 @@
 //! Global action and conversation search, using the sidebar's conversation rows.
 use super::*;
 
+const HISTORY_RESULT_LIMIT: usize = 30;
+
 pub(super) struct CommandPalette {
     search: Entity<ComposerInput>,
     focus: FocusHandle,
@@ -124,7 +126,13 @@ impl Shell {
             })
             .collect();
         chats.sort_by(|a, b| spaces::compare_sidebar_chats(self.settings.sidebar_sort, a, b));
-        entries.extend(chats.into_iter().map(|chat| Entry::Chat(chat.id.clone())));
+        // Limit after filtering and sorting so every chat remains searchable.
+        entries.extend(
+            chats
+                .into_iter()
+                .take(HISTORY_RESULT_LIMIT)
+                .map(|chat| Entry::Chat(chat.id.clone())),
+        );
         entries
     }
 
