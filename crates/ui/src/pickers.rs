@@ -4831,6 +4831,165 @@ mod tests {
     }
 
     #[gpui::test]
+    fn nested_model_menu_mouse_paths_work_on_both_sides(cx: &mut gpui::TestAppContext) {
+        use std::{cell::Cell, rc::Rc};
+        struct MouseFixture {
+            pickers: Entity<Pickers>,
+            on_left: bool,
+            bounds: Rc<Cell<gpui::Bounds<gpui::Pixels>>>,
+        }
+        impl Render for MouseFixture {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let measured = self.bounds.clone();
+                let menu = self.pickers.update(cx, |pickers, cx| {
+                    let content = pickers.render_harness_model_popover(cx);
+                    pickers.popover_frame_flush(304.0, content, cx)
+                });
+                div().size_full().relative().child(
+                    div()
+                        .absolute()
+                        .top(px(100.0))
+                        .w(px(304.0))
+                        .when(self.on_left, |el| el.right(px(32.0)))
+                        .when(!self.on_left, |el| el.left(px(32.0)))
+                        .child(menu)
+                        .child(
+                            gpui::canvas(move |bounds, _, _| measured.set(bounds), |_, _, _, _| {})
+                                .absolute()
+                                .inset_0(),
+                        ),
+                )
+            }
+        }
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        for on_left in [false, true] {
+            let measured = Rc::new(Cell::new(gpui::Bounds::default()));
+            let handle = cx.add_window(|_, cx| {
+                let state = cx.new(|_| AppState::new());
+                let pickers = cx.new(|cx| Pickers::new(state, cx));
+                pickers.update(cx, |pickers, cx| {
+                    let mut model = bare_model("test", "Test model");
+                    model.reasoning_levels = vec![ReasoningLevel::Low, ReasoningLevel::High];
+                    pickers.config.harness = Some(HarnessId::ClaudeCode);
+                    pickers.harnesses =
+                        Loadable::Ready(vec![descriptor(HarnessId::ClaudeCode, "Claude Code")]);
+                    pickers
+                        .models
+                        .insert(HarnessId::ClaudeCode, Loadable::Ready(vec![model]));
+                    pickers.open.open(PickerKind::HarnessModel);
+                    pickers.pick_model("test".into(), cx);
+                });
+                MouseFixture {
+                    pickers,
+                    on_left,
+                    bounds: measured.clone(),
+                }
+            });
+            let pickers = handle
+                .read_with(cx, |fixture, _| fixture.pickers.clone())
+                .unwrap();
+            cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+                .unwrap();
+            let parent = measured.get();
+            let trigger = gpui::point(
+                parent.center().x,
+                parent.bottom() - px(popover::CARD_INSET + 15.0),
+            );
+            let click = |window: &mut Window, cx: &mut App, position| {
+                window.dispatch_event(
+                    gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                        position,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                        button: gpui::MouseButton::Left,
+                        position,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                        button: gpui::MouseButton::Left,
+                        position,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            };
+            cx.update_window(handle.into(), |_, window, cx| {
+                click(window, cx, trigger);
+                window.draw(cx).clear();
+                window.draw(cx).clear();
+            })
+            .unwrap();
+            let submenu = pickers.read_with(cx, |pickers, _| {
+                assert_eq!(pickers.setting_menu, Some(ModelSetting::Reasoning));
+                assert_eq!(pickers.setting_on_left, on_left);
+                pickers
+                    .setting_bounds
+                    .expect("submenu measured after opening")
+            });
+            if on_left {
+                assert!(submenu.right() < parent.left());
+            } else {
+                assert!(submenu.left() > parent.right());
+            }
+            let gap_x = if on_left {
+                (submenu.right() + parent.left()) / 2.0
+            } else {
+                (parent.right() + submenu.left()) / 2.0
+            };
+            // Move out of the row diagonally, pause over the gap, overshoot
+            // below the submenu, and come back to its first choice.
+            let target = gpui::point(
+                submenu.left() + px(30.0),
+                submenu.bottom() - px(popover::CARD_INSET + 30.0 + popover::MENU_GAP + 15.0),
+            );
+            for position in [
+                gpui::point(gap_x, trigger.y + px(16.0)),
+                gpui::point(gap_x, submenu.bottom() + px(20.0)),
+                target,
+            ] {
+                cx.update_window(handle.into(), |_, window, cx| {
+                    window.dispatch_event(
+                        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                            position,
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                    window.draw(cx).clear();
+                })
+                .unwrap();
+                cx.executor().advance_clock(Duration::from_secs(2));
+                cx.run_until_parked();
+                pickers.read_with(cx, |pickers, _| {
+                    assert!(pickers.is_open());
+                    assert_eq!(pickers.setting_menu, Some(ModelSetting::Reasoning));
+                });
+            }
+            cx.update_window(handle.into(), |_, window, cx| click(window, cx, target))
+                .unwrap();
+            pickers.read_with(cx, |pickers, cx| {
+                assert_eq!(pickers.effective_reasoning(cx), Some(ReasoningLevel::Low));
+                assert!(pickers.setting_menu.is_none());
+                assert!(pickers.is_open());
+            });
+            cx.update_window(handle.into(), |_, window, cx| {
+                click(window, cx, gpui::point(px(8.0), px(8.0)))
+            })
+            .unwrap();
+            pickers.read_with(cx, |pickers, _| assert!(!pickers.is_open()));
+        }
+    }
+
+    #[gpui::test]
     fn remembered_options_stay_valid_for_the_sent_model_without_a_catalog(
         cx: &mut gpui::TestAppContext,
     ) {
