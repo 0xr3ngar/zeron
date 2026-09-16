@@ -2182,11 +2182,11 @@ impl Pickers {
             .child(self.search_box(&theme))
             .child(body)
             .child(
-                // Full-bleed through the card's 4px inset — a divider
+                // Full-bleed through the card's shared inset — a divider
                 // stopping short of the edges read as a mistake.
                 div()
                     .my(px(2.0))
-                    .mx(px(-4.0))
+                    .mx(px(-popover::CARD_INSET))
                     .h(px(1.0))
                     .flex_none()
                     .bg(theme.border.opacity(0.6)),
@@ -3305,7 +3305,7 @@ impl Pickers {
         let mut tabs = div()
             .flex_none()
             .h(px(40.0))
-            .px(px(6.0))
+            .px(px(popover::MENU_GAP))
             .border_b_1()
             .border_color(crate::theme::hairline(0.08))
             .flex()
@@ -3438,7 +3438,7 @@ impl Pickers {
                     },
                 )
                 .size_full()
-                .px(px(6.0))
+                .px(px(popover::MENU_GAP))
                 .track_scroll(&model_scroll)
                 .into_any_element(),
             )
@@ -3482,7 +3482,7 @@ impl Pickers {
             .relative()
             .flex_none()
             .h(px(LIST_HEIGHT))
-            .py(px(6.0))
+            .py(px(popover::MENU_GAP))
             // A whisper of wash keeps the scrolling band readable between
             // the pinned chrome above and the traits tray below.
             .bg(crate::theme::ink(0.02))
@@ -3496,7 +3496,7 @@ impl Pickers {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .px(px(6.0))
+                    .px(px(popover::MENU_GAP))
                     .children(list_children)
                     .into_any_element(),
             })
@@ -3522,8 +3522,7 @@ impl Pickers {
                 // growing the card past the viewport.
                 .max_h(px(236.0))
                 .overflow_y_scroll()
-                .px(px(6.0))
-                .pb(px(6.0))
+                .px(px(popover::MENU_GAP))
                 .child(sections)
                 .into_any_element()
         });
@@ -3577,7 +3576,7 @@ impl Pickers {
             .id(("model-row", ix))
             .px(px(8.0))
             .py(px(if compact { 5.0 } else { 6.0 }))
-            .rounded(px(6.0))
+            .rounded(px(popover::MENU_ITEM_RADIUS))
             .flex()
             .flex_row()
             .items_center()
@@ -3706,7 +3705,7 @@ impl Pickers {
                 .flex_none()
                 .w(px(22.0))
                 .h(px(22.0))
-                .rounded(px(6.0))
+                .rounded(px(popover::MENU_ITEM_RADIUS))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -3964,7 +3963,7 @@ impl Pickers {
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .py(px(4.0))
+            .py(px(popover::MENU_GAP))
             .children(rows)
             .into_any_element()
     }

@@ -5320,6 +5320,7 @@ impl Composer {
                             .max_h(px(312.0))
                             .flex()
                             .flex_col()
+                            .gap(px(crate::popover::MENU_GAP))
                             .overflow_y_scroll()
                             .track_scroll(&self.mention_scroll)
                             .children(rows),
@@ -5638,6 +5639,7 @@ impl Composer {
                             .max_h(px(312.0))
                             .flex()
                             .flex_col()
+                            .gap(px(crate::popover::MENU_GAP))
                             .overflow_y_scroll()
                             .track_scroll(&self.slash_scroll)
                             .children(rows),

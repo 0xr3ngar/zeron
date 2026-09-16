@@ -2,7 +2,7 @@
 use super::*;
 
 const HISTORY_RESULT_LIMIT: usize = 30;
-const RESULTS_SCROLL_GUTTER: f32 = 8.0;
+const RESULTS_SCROLL_GUTTER: f32 = popover::MENU_GAP;
 
 pub(super) struct CommandPalette {
     search: Entity<ComposerInput>,
@@ -275,7 +275,7 @@ impl Shell {
             } else {
                 unreachable!()
             };
-            rows.push(row.child(div().px(px(10.0)).child(content)));
+            rows.push(row.child(div().px(px(popover::MENU_GAP)).child(content)));
         }
         let height = (f32::from(viewport.height) - 180.0).clamp(100.0, 440.0);
         let body = div()

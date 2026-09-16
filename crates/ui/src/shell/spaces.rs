@@ -2437,7 +2437,7 @@ impl Shell {
             .max_h(px((f32::from(viewport.height) - 220.0).clamp(100.0, 424.0)))
             .overflow_y_scroll()
             .track_scroll(&scroll)
-            .px(px(10.0))
+            .px(px(popover::MENU_GAP))
             .flex()
             .flex_col()
             .gap(px(SIDEBAR_LIST_GAP))
@@ -2723,7 +2723,7 @@ impl Shell {
                 }))
                 .child(header)
                 .child(crumbs)
-                .child(div().min_h_0().py(px(8.0)).child(results))
+                .child(div().min_h_0().py(px(popover::MENU_GAP)).child(results))
                 .when_some(error, |el, error| {
                     el.child(
                         div()

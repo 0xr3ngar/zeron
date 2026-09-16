@@ -5717,7 +5717,11 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .rounded(px(8.0))
+            .rounded(px(if search_query.is_some() {
+                popover::MENU_ITEM_RADIUS
+            } else {
+                8.0
+            }))
             .px(px(Theme::SPACE_SM))
             .py(px(6.0))
             .text_color(motion::hover_blend(&fade_key, rest_text, text))
