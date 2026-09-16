@@ -394,12 +394,9 @@ impl FlipMorph {
 /// the two SOURCE geometries. The morph glides it instead of snapping.
 pub const CLUSTER_Y_DELTA: f32 = 2.5;
 
-/// The cluster's INTERNAL geometry is mode-independent. Reasoning/service
-/// tier and attachment form one utility group; Send is a distinct primary
-/// action. Both layouts reuse these distances so the flip cannot create a
-/// horizontal compression pulse.
-/// Only the wrapper's right inset differs: `pr-2` (8) compact vs `px-3` (12)
-/// expanded — a whole-cluster 4px shift that glides with the morph.
+/// Send's right inset differs between compact (8px) and expanded (12px).
+/// Glide this four-pixel shift during the morph. The attachment/model group
+/// stays anchored to the left edge in both layouts.
 pub const CLUSTER_X_DELTA: f32 = 4.0;
 /// Optical join between the picker group and the paperclip. This is tighter
 /// than the structural spacing ladder because the narrow paperclip glyph
@@ -409,8 +406,7 @@ pub const ACTION_UTILITY_GAP: f32 = 2.0;
 pub const ACTION_PRIMARY_GAP: f32 = Theme::SPACE_SM;
 
 /// The right inset for the in-flight morph: eases from the OLD mode's resting
-/// inset to the committed mode's (compact 8 ↔ expanded 12) — pairwise button
-/// distances stay constant; the cluster glides as one.
+/// inset to the committed mode's (compact 8 ↔ expanded 12).
 pub fn morph_cluster_inset(expanded: bool, progress: f32) -> f32 {
     let (from, to) = if expanded {
         (8.0, 8.0 + CLUSTER_X_DELTA)
@@ -7547,9 +7543,8 @@ impl Render for Composer {
         let send_button = self.render_send_button(mode, cx);
         // Attach button — opens the native image picker (the original's hidden
         // `<input type=file accept="image/*" multiple>`); paste/drop also feed
-        // the same strip. The parent action cluster owns the spacing: adding a
-        // second margin here made the picker→attachment gap twice as wide as
-        // attachment→send and made the paperclip look detached.
+        // the same strip. The leading utility group owns the spacing between
+        // this button and the model picker.
         let attach = div()
             .id("composer-attach")
             .size(px(28.0))
@@ -7672,17 +7667,15 @@ impl Render for Composer {
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .justify_end()
                                 .gap(px(ACTION_UTILITY_GAP))
-                                .child(self.pickers.clone())
-                                .child(attach),
+                                .child(attach)
+                                .child(self.pickers.clone()),
                         )
                         .child(send_button),
                 )
         } else {
-            // Compact pill: input and the actions cluster on one 47px line
-            // (`py-3 pl-4 pr-2` textarea, `gap-2 py-1.5 pl-1 pr-2` cluster;
-            // the 22.75px line centers to the same 12px inset as `py-3`).
+            // Compact pill: attachment/model on the left, the input filling
+            // the middle, and Send on the right, all on one 47px line.
             // The row is BOTTOM-justified: during the collapse morph the pill
             // top sweeps down over a stationary row, the text walks down from
             // its expanded resting place via a decaying relative offset, and
@@ -7712,10 +7705,23 @@ impl Render for Composer {
                         .items_center()
                         .child(
                             div()
+                                .min_w_0()
+                                .max_w(gpui::relative(0.45))
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(ACTION_UTILITY_GAP))
+                                .pl(px(12.0))
+                                .relative()
+                                .top(px(-cluster_dy))
+                                .child(attach)
+                                .child(self.pickers.clone()),
+                        )
+                        .child(
+                            div()
                                 .flex_1()
                                 .min_w_0()
-                                .pl(px(16.0))
-                                .pr(px(8.0))
+                                .px(px(8.0))
                                 .relative()
                                 .top(px(-text_glide))
                                 .child(self.render_input_with_completion()),
@@ -7723,26 +7729,9 @@ impl Render for Composer {
                         .child(
                             div()
                                 .flex_none()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                // Same utility/primary grouping as expanded;
-                                // the right inset alone glides 12→8.
-                                .gap(px(ACTION_PRIMARY_GAP))
-                                .pl(px(4.0))
                                 .pr(px(morph_cluster_inset(false, layout_morph_t)))
                                 .relative()
                                 .top(px(-cluster_dy))
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .gap(px(ACTION_UTILITY_GAP))
-                                        .child(self.pickers.clone())
-                                        .child(attach),
-                                )
                                 .child(send_button),
                         ),
                 )

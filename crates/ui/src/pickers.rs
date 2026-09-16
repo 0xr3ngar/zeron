@@ -4488,17 +4488,7 @@ impl Render for Pickers {
             None => None,
         };
 
-        // Left cluster: empty — the device/project pickers live in the
-        // composer FOOTER row alongside checkout + ref.
-        // Right cluster: agent+model and traits — the composer appends
-        // attach + send after this element (zeron composer-actions.tsx
-        // arrangement).
-        let left = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .min_w_0()
-            .gap(px(4.0));
+        // The composer places this model chip beside the attachment button.
         // ONE chip for the whole run identity (user request): brand icon +
         // model name, then the joined traits summary ("Medium", "High · 1M ·
         // Fast", "Agent · Balance") as the chip's muted second tone — the
@@ -4522,7 +4512,7 @@ impl Render for Pickers {
             &theme,
             cx,
         );
-        let right = div()
+        div()
             .flex()
             .flex_row()
             .items_center()
@@ -4541,17 +4531,7 @@ impl Render for Pickers {
                 PickerKind::HarnessModel,
                 "model-popover",
                 closing,
-            ));
-        div()
-            .w_full()
-            .min_w_0()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(px(Theme::SPACE_SM))
-            .child(left)
-            .child(right)
+            ))
     }
 }
 
