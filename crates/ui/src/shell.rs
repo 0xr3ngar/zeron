@@ -58,7 +58,9 @@ use crate::theme::Theme;
 use crate::transcript::{self, Transcript, TranscriptEvent};
 use crate::workspace_links::resolve_workspace_file_link;
 
+mod side_chats;
 mod spaces;
+use side_chats::SideChatTab;
 mod tabs;
 
 use spaces::{AddSpaceFlow, RenameSpaceDialog};
@@ -462,6 +464,7 @@ pub enum RightSurface {
     /// A subagent's transcript, read-only (per-subagent viz) — the handle
     /// keys [`Shell::subagent_tabs`].
     Subagent(u64),
+    SideChat(u64),
 }
 
 fn push_unique_right_surface(tabs: &mut Vec<RightSurface>, surface: RightSurface) -> bool {
@@ -1227,6 +1230,10 @@ pub struct Shell {
     /// [`Transcript`] pinned to its subagent doc.
     subagent_tabs: std::collections::HashMap<u64, SubagentTab>,
     subagent_seq: u64,
+    side_chats: std::collections::HashMap<u64, SideChatTab>,
+    side_chat_seq: u64,
+    side_chat_creating: bool,
+    side_chat_error: Option<SharedString>,
     browsers: std::collections::HashMap<u64, Entity<crate::browser::BrowserSurface>>,
     browser_subs: std::collections::HashMap<u64, Subscription>,
     browser_seq: u64,
@@ -1585,6 +1592,10 @@ impl Shell {
             diff_seq: 0,
             subagent_tabs: std::collections::HashMap::new(),
             subagent_seq: 0,
+            side_chats: std::collections::HashMap::new(),
+            side_chat_seq: 0,
+            side_chat_creating: false,
+            side_chat_error: None,
             browsers: std::collections::HashMap::new(),
             browser_subs: std::collections::HashMap::new(),
             browser_seq: 0,
@@ -1737,6 +1748,11 @@ impl Shell {
     // ---- splash ----
 
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
+        if state.read(cx).engine().is_none() {
+            self.side_chats.clear();
+            self.side_chat_creating = false;
+            self.side_chat_error = None;
+        }
         if let Some(notice) = state.update(cx, |state, _| state.take_deep_link_notice()) {
             self.sidebar_notice = Some(notice.into());
         }
@@ -2214,6 +2230,15 @@ impl Shell {
                     .iter()
                     .find(|(k, _, _)| k == tab)
                     .map(|(_, title, _)| (*surface, title.clone(), false, None)),
+                RightSurface::SideChat(id) => self.side_chats.get(id).map(|tab| {
+                    let title = tab
+                        .state
+                        .read(cx)
+                        .selected_chat_row()
+                        .and_then(|c| c.title.clone())
+                        .unwrap_or_else(|| "Side chat".into());
+                    (*surface, title.into(), false, None)
+                }),
                 RightSurface::Subagent(id) => self
                     .subagent_tabs
                     .get(id)
@@ -2246,6 +2271,7 @@ impl Shell {
             RightSurface::Picker
             | RightSurface::Diff(_)
             | RightSurface::Terminal(_)
+            | RightSurface::SideChat(_)
             | RightSurface::Subagent(_)
             | RightSurface::Browser(_) => {
                 return None;
@@ -2298,7 +2324,7 @@ impl Shell {
         let picked = self.panels.get(&self.panel_key(cx)).right_active;
         let rows = self.right_surface_rows(cx);
         let exists = match picked {
-            RightSurface::Picker => false,
+            RightSurface::Picker => true,
             surface => rows.iter().any(|(s, _, _, _)| *s == surface),
         };
         if exists {
@@ -2349,6 +2375,14 @@ impl Shell {
             }
             // The tab's feed (watch or snapshot) runs from open to close —
             // activation needs no revalidation.
+            RightSurface::SideChat(id) => {
+                if let Some(tab) = self.side_chats.get(&id) {
+                    tab.composer.update(cx, |composer, cx| {
+                        composer.focus_pending = true;
+                        cx.notify();
+                    });
+                }
+            }
             RightSurface::Subagent(_) | RightSurface::Browser(_) => {}
             RightSurface::Picker => {}
         }
@@ -2834,7 +2868,12 @@ impl Shell {
                 .update(cx, |s, cx| s.watch_subagent_doc(doc_id.to_string(), cx));
             return None;
         };
-        let blob_ref = format!("{chat_id}/{doc_id}");
+        // Copied spawn chips retain their original subagent doc namespace.
+        let source_chat = doc_id
+            .split_once("--sub--")
+            .map(|(source, _)| source)
+            .unwrap_or(chat_id);
+        let blob_ref = format!("{source_chat}/{doc_id}");
         let state = self.state.clone();
         let doc_id = doc_id.to_string();
         Some(cx.spawn(async move |_, cx| {
@@ -2910,6 +2949,12 @@ impl Shell {
                 let panel = self.right_terminal_panel(cx);
                 panel.update(cx, |panel, cx| panel.close_tab_by_key(tab, window, cx));
             }
+            RightSurface::SideChat(id) => {
+                self.side_chats.remove(&id);
+                if was_active {
+                    window.focus(&self.composer.focus_handle(cx), cx);
+                }
+            }
             RightSurface::Subagent(id) => {
                 // Unwatch drops the watch task — that cancels the engine-side
                 // watch and unpins the subagent doc from the engine LRU.
@@ -2920,9 +2965,16 @@ impl Shell {
             }
             RightSurface::Picker => {}
         }
+        self.close_empty_right_pane(&key, cx);
+        let fallback = self
+            .right_tabs
+            .get(&key)
+            .and_then(|tabs| tabs.first())
+            .copied()
+            .unwrap_or_default();
         self.panels.update(&key, |p| {
             if p.right_active == surface {
-                p.right_active = RightSurface::Picker;
+                p.right_active = fallback;
             }
         });
         cx.notify();
@@ -3072,9 +3124,16 @@ impl Shell {
             _ => return,
         }
         self.pending_file_closes.remove(&surface);
+        self.close_empty_right_pane(panel_key, cx);
+        let fallback = self
+            .right_tabs
+            .get(panel_key)
+            .and_then(|tabs| tabs.first())
+            .copied()
+            .unwrap_or_default();
         self.panels.update(panel_key, |panel| {
             if panel.right_active == surface {
-                panel.right_active = RightSurface::Picker;
+                panel.right_active = fallback;
             }
         });
         cx.notify();
@@ -7303,6 +7362,7 @@ impl Shell {
                     });
                     panel.into_any_element()
                 }
+                RightSurface::SideChat(id) => self.render_side_chat(id, cx),
                 RightSurface::Subagent(id) if self.subagent_tabs.contains_key(&id) => {
                     let transcript = self
                         .subagent_tabs
@@ -7381,6 +7441,7 @@ impl Shell {
     /// (icon + label). The old two-card grid clipped in narrow panes and
     /// wasted short ones.
     fn render_surface_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let history = self.side_chat_history(cx);
         let theme = Theme::of(cx).clone();
         let text = theme.text;
         let muted = theme.text_muted;
@@ -7424,6 +7485,24 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
+                    .child(
+                        row(
+                            "surface-card-side-chat",
+                            icons::CHAT_ROUND_LINE,
+                            if self.side_chat_creating {
+                                "Creating side chat…"
+                            } else {
+                                "Side chat"
+                            },
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.create_side_chat(cx))),
+                    )
+                    .children(
+                        self.side_chat_error
+                            .clone()
+                            .map(|error| div().text_color(theme.text_muted).child(error)),
+                    )
+                    .child(history)
                     .child(
                         row("surface-card-files", icons::FOLDER_WITH_FILES, "Files").on_click(
                             cx.listener(|this, _, window, cx| {
@@ -7642,6 +7721,7 @@ impl Shell {
                         }
                     })
                     .unwrap_or(icons::LIST),
+                RightSurface::SideChat(_) => icons::CHAT_ROUND_LINE,
                 RightSurface::Subagent(_) => icons::BOT,
                 RightSurface::Terminal(_) => icons::TERMINAL,
                 RightSurface::Browser(_) => icons::GLOBE,
@@ -7659,6 +7739,13 @@ impl Shell {
                 _ => None,
             };
             let subagent_running = match surface {
+                RightSurface::SideChat(id) => self.side_chats.get(&id).is_some_and(|tab| {
+                    let state = tab.state.read(cx);
+                    state
+                        .selected_chat
+                        .as_deref()
+                        .is_some_and(|id| state.indicator_for(id, Utc::now()) == Indicator::Working)
+                }),
                 RightSurface::Browser(id) => self
                     .browsers
                     .get(&id)
@@ -7908,6 +7995,20 @@ impl Shell {
                         .flex()
                         .flex_col()
                         .gap(px(2.0))
+                        .child(
+                            popover::menu_row(&theme, false, "right-plus-side-chat")
+                                .id("right-plus-side-chat-row")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_right_active(RightSurface::Picker, cx);
+                                    this.close_right_plus(cx);
+                                }))
+                                .child(
+                                    icon(icons::CHAT_ROUND_LINE)
+                                        .size(px(13.0))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(SharedString::from("Side chats")),
+                        )
                         .child(
                             popover::menu_row(&theme, false, "right-plus-files")
                                 .id("right-plus-files-row")
@@ -10690,13 +10791,17 @@ mod exit_regressions {
                 assert!(shell.close_active_surface(window, cx));
                 assert_eq!(shell.resolved_right_active(cx), RightSurface::Picker);
 
-                // An open pane with nothing left to close falls through to the
-                // window-close rung instead of being consumed.
+                assert!(
+                    !shell.right_pane_open(cx),
+                    "closing the final tab closes the pane"
+                );
+
+                // With the pane closed, the next close falls through to the window.
                 assert!(!shell.close_active_surface(window, cx));
 
-                // So does an already-closed pane.
+                // Reopening the empty pane shows the surface picker.
                 shell.toggle_right_pane(cx);
-                assert!(!shell.right_pane_open(cx));
+                assert!(shell.right_pane_open(cx));
                 assert!(!shell.close_active_surface(window, cx));
             })
             .unwrap();
