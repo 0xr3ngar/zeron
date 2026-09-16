@@ -1304,6 +1304,7 @@ impl Shell {
                     is_selected,
                     false,
                     jump_label,
+                    None,
                     theme,
                     cx,
                 );

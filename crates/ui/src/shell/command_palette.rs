@@ -152,6 +152,7 @@ impl Shell {
         palette.active = palette.active.min(entries.len().saturating_sub(1));
         let active = palette.active;
         let search = palette.search.clone();
+        let query = search.read(cx).text().to_string();
         let focus = palette.focus.clone();
         let scroll = palette.scroll.clone();
         let theme = Theme::of(cx).clone();
@@ -160,18 +161,16 @@ impl Shell {
         for (ix, entry) in entries.iter().enumerate() {
             let mut row = div().id(("command-result", ix)).flex_none();
             if ix == 0 && action_count > 0 {
-                row = row.child(section_label("Actions", &theme));
+                row = row.child(div().px(px(10.0)).child(section_label("Actions", &theme)));
             }
-            if ix == action_count && ix < entries.len() {
+            if ix == action_count && action_count > 0 {
                 row = row.child(
                     div()
-                        .when(action_count > 0, |el| {
-                            el.mt(px(8.0))
-                                .pt(px(8.0))
-                                .border_t_1()
-                                .border_color(theme.border)
-                        })
-                        .child(section_label("Chat history", &theme)),
+                        .mt(px(8.0))
+                        .mb(px(8.0))
+                        .h(px(1.0))
+                        .w_full()
+                        .bg(theme.border),
                 );
             }
             let content = if let Some((label, glyph)) = entry.action() {
@@ -183,7 +182,11 @@ impl Shell {
                         this.activate_command(entry.clone(), window, cx)
                     }))
                     .child(icon(glyph).size(px(17.0)).text_color(theme.text_muted))
-                    .child(label)
+                    .child(popover::search_highlight(
+                        label.into(),
+                        Some(&query),
+                        &theme,
+                    ))
                     .into_any_element()
             } else if let Entry::Chat(id) = entry {
                 let state = self.state.read(cx);
@@ -228,13 +231,14 @@ impl Shell {
                     ix == active,
                     chat.archived,
                     None,
+                    Some(&query),
                     &theme,
                     cx,
                 )
             } else {
                 unreachable!()
             };
-            rows.push(row.child(content));
+            rows.push(row.child(div().px(px(10.0)).child(content)));
         }
         let height = (f32::from(viewport.height) - 180.0).clamp(100.0, 440.0);
         let body = div()
@@ -243,7 +247,6 @@ impl Shell {
             .max_h(px(height))
             .overflow_y_scroll()
             .track_scroll(&scroll)
-            .px(px(10.0))
             .py(px(8.0))
             .flex()
             .flex_col()

@@ -5476,6 +5476,7 @@ impl Shell {
         // nine chips appear together instead of leaving a hole on whichever
         // row is busy or under the pointer.
         jump_label: Option<SharedString>,
+        search_query: Option<&str>,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -5748,7 +5749,7 @@ impl Shell {
                             .text_size(crate::typography::ui_rems(11.0))
                             .line_height(px(14.0))
                             .text_color(subline)
-                            .child(space_name),
+                            .child(popover::search_highlight(space_name, search_query, theme)),
                     )
                     .child(div().text_color(subline).child(corner)),
             )
@@ -5779,7 +5780,7 @@ impl Shell {
                             .truncate()
                             .text_size(crate::typography::ui_rems(13.0))
                             .line_height(px(17.0))
-                            .child(title),
+                            .child(popover::search_highlight(title, search_query, theme)),
                     ),
             )
             // Line 3 is structural, not reserved whitespace: compact states
@@ -5806,17 +5807,18 @@ impl Shell {
                                     .text_size(crate::typography::ui_rems(11.0))
                                     .line_height(px(14.0))
                                     .text_color(subline)
-                                    .child(branch),
+                                    .child(popover::search_highlight(branch, search_query, theme)),
                             )
                         })
                         // Stable invisible spring keeps the optional PR badge
                         // pinned right without changing no-PR paint.
                         .child(div().flex_1().min_w_0())
                         .when_some(change_request, |el, summary| {
-                            el.child(crate::change_requests::pull_request_badge(
+                            el.child(crate::change_requests::pull_request_badge_with_query(
                                 format!("chat-pr-{id}").into(),
                                 summary,
                                 crate::change_requests::ChangeRequestBadgeSurface::Sidebar,
+                                search_query,
                                 theme,
                             ))
                         }),
