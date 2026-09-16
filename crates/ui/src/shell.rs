@@ -127,9 +127,19 @@ enum ChatMenuPage {
     Copy,
 }
 
+#[derive(Clone, Copy)]
+enum TabCloseAction {
+    This,
+    Others,
+    Left,
+    Right,
+}
+
 #[derive(Clone)]
 struct ChatMenuState {
+    // Empty for surfaces that have no underlying chat.
     chat_id: String,
+    tab: Option<(String, RightSurface)>,
     position: Point<Pixels>,
     page: ChatMenuPage,
 }
@@ -3139,8 +3149,36 @@ impl Shell {
         }))
     }
 
-    /// A surface tab's ✕. The active fallback happens naturally through
-    /// [`Self::resolved_right_active`] on the next frame.
+    /// Snapshot the displayed order before closing tabs mutates it.
+    fn tabs_to_close(
+        &self,
+        surface: RightSurface,
+        action: TabCloseAction,
+        cx: &App,
+    ) -> Vec<RightSurface> {
+        let tabs: Vec<_> = self
+            .right_surface_rows(cx)
+            .into_iter()
+            .map(|(tab, _, _, _)| tab)
+            .collect();
+        let Some(index) = tabs.iter().position(|tab| *tab == surface) else {
+            return Vec::new();
+        };
+        tabs.into_iter()
+            .enumerate()
+            .filter_map(|(i, tab)| {
+                let close = match action {
+                    TabCloseAction::This => i == index,
+                    TabCloseAction::Others => i != index,
+                    TabCloseAction::Left => i < index,
+                    TabCloseAction::Right => i > index,
+                };
+                close.then_some(tab)
+            })
+            .collect()
+    }
+
+    /// Close one surface through its normal lifecycle, including unsaved-file prompts.
     fn close_right_surface(
         &mut self,
         surface: RightSurface,
@@ -5779,6 +5817,7 @@ impl Shell {
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                     this.chat_menu.open(ChatMenuState {
+                        tab: None,
                         chat_id: menu_id.clone(),
                         position: event.position,
                         page: ChatMenuPage::Root,
@@ -7003,6 +7042,7 @@ impl Shell {
                 .flex()
                 .flex_col();
             let menu = match menu_state.page {
+                _ if chat_id.is_empty() => menu,
                 ChatMenuPage::Root => menu
                     .child(
                         popover::menu_row(&theme, false, format!("chat-menu-rename-{chat_id}"))
@@ -7146,8 +7186,47 @@ impl Shell {
                         )
                     })
                 }
+            };
+            let mut menu = menu;
+            if let Some((key, surface)) = menu_state.tab
+                && matches!(menu_state.page, ChatMenuPage::Root)
+            {
+                if !chat_id.is_empty() {
+                    menu = menu.child(popover::menu_separator());
+                }
+                for (action, label) in [
+                    (TabCloseAction::This, "Close tab"),
+                    (TabCloseAction::Others, "Close other tabs"),
+                    (TabCloseAction::Left, "Close tabs to the left"),
+                    (TabCloseAction::Right, "Close tabs to the right"),
+                ] {
+                    let enabled = !self.tabs_to_close(surface, action, cx).is_empty();
+                    let key = key.clone();
+                    menu = menu.child(
+                        popover::menu_row(&theme, false, label)
+                            .id(SharedString::from(label))
+                            .when(!enabled, |el| el.opacity(0.4).cursor_default())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if !enabled {
+                                    return;
+                                }
+                                this.close_chat_menu(cx);
+                                if this.panel_key(cx) == key {
+                                    for tab in this.tabs_to_close(surface, action, cx) {
+                                        this.close_right_surface(tab, window, cx);
+                                    }
+                                }
+                            }))
+                            .child(
+                                icon(icons::CLOSE)
+                                    .size(px(16.0))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(label),
+                    );
+                }
             }
-            .into_any_element();
+            let menu = menu.into_any_element();
             overlays.push(popover::menu_at(
                 "chat-context-menu",
                 position,
@@ -8550,20 +8629,21 @@ impl Shell {
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                        if let RightSurface::SideChat(id) = surface {
-                            if let Some(chat_id) = this
+                        let chat_id = match surface {
+                            RightSurface::SideChat(id) => this
                                 .side_chats
                                 .get(&id)
                                 .and_then(|tab| tab.state.read(cx).selected_chat.clone())
-                            {
-                                this.chat_menu.open(ChatMenuState {
-                                    chat_id,
-                                    position: event.position,
-                                    page: ChatMenuPage::Root,
-                                });
-                                cx.notify();
-                            }
-                        }
+                                .unwrap_or_default(),
+                            _ => String::new(),
+                        };
+                        this.chat_menu.open(ChatMenuState {
+                            chat_id,
+                            tab: Some((this.panel_key(cx), surface)),
+                            position: event.position,
+                            page: ChatMenuPage::Root,
+                        });
+                        cx.notify();
                     }),
                 )
                 // Middle-click closes, like every tab strip.
@@ -12063,6 +12143,40 @@ mod exit_regressions {
                     shell.resolved_right_active(cx),
                     RightSurface::Browser(second)
                 );
+
+                shell.add_browser_surface(None, window, cx);
+                let third = shell.browser_seq;
+                let middle = RightSurface::Browser(second);
+                assert_eq!(
+                    shell.tabs_to_close(middle, TabCloseAction::Left, cx),
+                    vec![RightSurface::Browser(first)]
+                );
+                assert_eq!(
+                    shell.tabs_to_close(middle, TabCloseAction::Right, cx),
+                    vec![RightSurface::Browser(third)]
+                );
+                assert_eq!(
+                    shell.tabs_to_close(middle, TabCloseAction::Others, cx),
+                    vec![RightSurface::Browser(first), RightSurface::Browser(third)]
+                );
+                assert_eq!(
+                    shell.tabs_to_close(middle, TabCloseAction::This, cx),
+                    vec![middle]
+                );
+                assert!(
+                    shell
+                        .tabs_to_close(RightSurface::Browser(first), TabCloseAction::Left, cx)
+                        .is_empty()
+                );
+                assert!(
+                    shell
+                        .tabs_to_close(RightSurface::Browser(third), TabCloseAction::Right, cx)
+                        .is_empty()
+                );
+                for tab in shell.tabs_to_close(middle, TabCloseAction::Right, cx) {
+                    shell.close_right_surface(tab, window, cx);
+                }
+                shell.set_right_active(middle, cx);
 
                 // ⌘W closes the active tab, not the window.
                 assert!(shell.close_active_surface(window, cx));

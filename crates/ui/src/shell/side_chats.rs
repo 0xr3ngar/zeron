@@ -187,15 +187,24 @@ impl Shell {
         chats
             .sort_by_key(|chat| std::cmp::Reverse(chat.last_message_at.unwrap_or(chat.created_at)));
         let theme = Theme::of(cx).clone();
-        let count = chats.len();
+        if chats.is_empty() {
+            return gpui::Empty.into_any_element();
+        }
         let mut trigger = div()
             .id("side-chat-history-button")
+            .role(gpui::Role::Button)
+            .aria_label("Side chat history")
+            .tooltip(|_, cx| {
+                cx.new(|_| SurfaceTabTooltip {
+                    text: "Side chat history".into(),
+                })
+                .into()
+            })
             .relative()
             .flex()
             .items_center()
-            .gap(px(6.0))
-            .px(px(10.0))
-            .py(px(7.0))
+            .justify_center()
+            .size(px(30.0))
             .rounded(px(8.0))
             .text_size(crate::typography::ui_rems(12.0))
             .text_color(theme.text_muted)
@@ -219,15 +228,7 @@ impl Shell {
                 icon(icons::CHAT_ROUND_LINE)
                     .size(px(14.0))
                     .text_color(theme.text_muted),
-            )
-            .child("Side chats")
-            .when(count > 0, |el| {
-                el.child(
-                    div()
-                        .text_color(theme.text_muted.opacity(0.7))
-                        .child(count.to_string()),
-                )
-            });
+            );
         if self.side_chat_history_popup.get().is_some() {
             let mut list = div()
                 .id("side-chat-history-list")
@@ -235,15 +236,6 @@ impl Shell {
                 .overflow_y_scroll()
                 .flex()
                 .flex_col();
-            if chats.is_empty() {
-                list = list.child(
-                    div()
-                        .px(px(12.0))
-                        .py(px(18.0))
-                        .text_color(theme.text_muted)
-                        .child("Your side chats will appear here."),
-                );
-            }
             for chat in chats {
                 let title = chat
                     .title
@@ -256,6 +248,7 @@ impl Shell {
                 list = list.child(
                     popover::menu_row(&theme, false, format!("side-chat-{}", chat.id))
                         .id(SharedString::from(format!("side-chat-{}", chat.id)))
+                        .flex_none()
                         .child(
                             icon(icons::CHAT_ROUND_LINE)
                                 .size(px(15.0))
@@ -281,6 +274,7 @@ impl Shell {
                                 cx.stop_propagation();
                                 this.close_side_chat_history(cx);
                                 this.chat_menu.open(ChatMenuState {
+                                    tab: None,
                                     chat_id: menu_id.clone(),
                                     position: event.position,
                                     page: ChatMenuPage::Root,
@@ -295,14 +289,6 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_side_chat_history(cx)))
-                .child(
-                    div()
-                        .px(px(8.0))
-                        .py(px(7.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
-                        .child("Side chats"),
-                )
                 .child(list)
                 .into_any_element();
             trigger = trigger.child(popover::anchored_menu_above_end(

@@ -1552,6 +1552,7 @@ impl Shell {
                             MouseButton::Right,
                             cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
                                 this.chat_menu.open(ChatMenuState {
+                                    tab: None,
                                     chat_id: menu_id.clone(),
                                     position: event.position,
                                     page: ChatMenuPage::Root,
