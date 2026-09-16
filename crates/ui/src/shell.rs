@@ -7217,11 +7217,6 @@ impl Shell {
                                     }
                                 }
                             }))
-                            .child(
-                                icon(icons::CLOSE)
-                                    .size(px(16.0))
-                                    .text_color(theme.text_muted),
-                            )
                             .child(label),
                     );
                 }
