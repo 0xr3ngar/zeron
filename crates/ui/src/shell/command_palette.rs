@@ -184,10 +184,19 @@ impl Shell {
             }
             let content = if let Some((label, glyph)) = entry.action() {
                 let shortcut = match entry {
-                    Entry::NewChat => {
-                        let combo = &self.settings.keymap.new_session;
+                    Entry::NewChat | Entry::NewProject => {
+                        let id = if *entry == Entry::NewChat {
+                            ShortcutId::NewSession
+                        } else {
+                            ShortcutId::NewProject
+                        };
+                        let combo = self.settings.keymap.get(id);
                         let valid = Keystroke::parse(&platform_combo(combo)).is_ok();
-                        Some(crate::settings::badge_combo(if valid { combo } else { "mod-n" }))
+                        Some(crate::settings::badge_combo(if valid {
+                            combo
+                        } else {
+                            id.default_combo()
+                        }))
                     }
                     Entry::Settings => Some(crate::settings::badge_combo("mod-,")),
                     _ => None,
