@@ -91,6 +91,8 @@ impl Shell {
                 let transcript = transcript.clone();
                 move |_: &mut Self, _, event, cx| {
                     transcript.update(cx, |t, cx| match event {
+                        // A side chat is already minted before its composer mounts.
+                        ComposerEvent::NewThreadTransitionStarted => {}
                         ComposerEvent::Sent {
                             chat_id,
                             message_id,
