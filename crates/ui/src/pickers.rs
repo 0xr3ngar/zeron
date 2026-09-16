@@ -509,6 +509,7 @@ pub struct Pickers {
     setting_menu: Option<ModelSetting>,
     setting_active: usize,
     setting_on_left: bool,
+    model_space_below: Option<f32>,
     setting_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     setting_scroll: gpui::ScrollHandle,
     harnesses: Loadable<Vec<HarnessDescriptor>>,
@@ -690,6 +691,7 @@ impl Pickers {
             setting_menu: None,
             setting_active: 0,
             setting_on_left: false,
+            model_space_below: None,
             setting_bounds: None,
             setting_scroll: gpui::ScrollHandle::new(),
             harnesses: Loadable::Idle,
@@ -3217,7 +3219,18 @@ impl Pickers {
         // Compact tabbed layout (user request, modeled on the referenced
         // picker): the model LIST gets a fixed band of roughly seven compact
         // rows; the pinned traits tray below sizes to its sections.
-        const LIST_HEIGHT: f32 = 216.0;
+        let list_height = if self.state.read(cx).selected_chat.is_none() {
+            // Keep the settings tray visible while the model list scrolls
+            // within the room below the new-chat composer.
+            let tray_height = if self.setting_groups(cx).is_empty() {
+                0.0
+            } else {
+                self.setting_groups(cx).len() as f32 * 32.0 + 7.0
+            };
+            (self.model_space_below.unwrap_or(640.0) - 82.0 - tray_height).clamp(30.0, 216.0)
+        } else {
+            216.0
+        };
 
         let theme = Theme::of(cx).for_popup();
 
@@ -3226,7 +3239,7 @@ impl Pickers {
         match &self.harnesses {
             Loadable::Loading | Loadable::Idle => {
                 return div()
-                    .h(px(LIST_HEIGHT))
+                    .h(px(list_height))
                     .p(px(8.0))
                     .child(popover::skeleton_menu_rows(
                         "harness-skeleton",
@@ -3240,7 +3253,7 @@ impl Pickers {
             Loadable::Error(message) => {
                 let message = message.clone();
                 return div()
-                    .h(px(LIST_HEIGHT))
+                    .h(px(list_height))
                     .p(px(8.0))
                     .child(self.retry_row(
                         "harness-retry",
@@ -3481,7 +3494,7 @@ impl Pickers {
             .id("model-list-scroll-host")
             .relative()
             .flex_none()
-            .h(px(LIST_HEIGHT))
+            .h(px(list_height))
             .py(px(popover::CARD_INSET))
             // A whisper of wash keeps the scrolling band readable between
             // the pinned chrome above and the traits tray below.
@@ -4512,6 +4525,52 @@ impl Render for Pickers {
             &theme,
             cx,
         );
+        let new_chat = self.state.read(cx).selected_chat.is_none();
+        let entity = cx.entity().downgrade();
+        let model_chip = model_chip.relative().child(
+            gpui::canvas(
+                move |bounds, window, cx| {
+                    let available = (f32::from(window.viewport_size().height - bounds.bottom())
+                        - 14.0)
+                        .max(0.0);
+                    let _ = entity.update(cx, |this, cx| {
+                        if this.model_space_below != Some(available) {
+                            this.model_space_below = Some(available);
+                            if new_chat && this.open_kind() == Some(PickerKind::HarnessModel) {
+                                cx.notify();
+                                window.request_animation_frame();
+                            }
+                        }
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        );
+        let model_chip = if new_chat {
+            if overlay
+                .as_ref()
+                .is_some_and(|(kind, _)| *kind == PickerKind::HarnessModel)
+                && let Some((_, content)) = overlay.take()
+            {
+                model_chip.child(popover::anchored_menu_below_end(
+                    "model-popover",
+                    content,
+                    closing,
+                ))
+            } else {
+                model_chip
+            }
+        } else {
+            attach_overlay_end(
+                model_chip,
+                &mut overlay,
+                PickerKind::HarnessModel,
+                "model-popover",
+                closing,
+            )
+        };
         div()
             .flex()
             .flex_row()
@@ -4523,15 +4582,7 @@ impl Render for Pickers {
             // instead of truncating (user report).
             .min_w_0()
             .gap(px(4.0))
-            // End-anchored: the menu's right edge sits flush with the chip's
-            // right edge (user request), same as the footer's ref popover.
-            .child(attach_overlay_end(
-                model_chip,
-                &mut overlay,
-                PickerKind::HarnessModel,
-                "model-popover",
-                closing,
-            ))
+            .child(model_chip)
     }
 }
 
