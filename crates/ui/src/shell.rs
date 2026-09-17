@@ -38,7 +38,6 @@ use crate::rail;
 use crate::settings::accounts::AccountsPage;
 use crate::settings::appearance::{AppearancePage, AppearanceSettingsEvent};
 use crate::settings::archived::ArchivedPage;
-use crate::settings::devices::DevicesPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::harnesses::HarnessesPage;
 use crate::settings::notifications::{NotificationsEvent, NotificationsPage};
@@ -399,7 +398,6 @@ pub fn apply_keymap(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
     Workspace,
-    Devices,
     /// Which harnesses the composer offers (enable/disable toggles).
     Harnesses,
     /// Per-provider CLI accounts (login, usage) — labeled "Accounts".
@@ -413,9 +411,8 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 10] = [
+    pub const ALL: [SettingsSection; 9] = [
         SettingsSection::Workspace,
-        SettingsSection::Devices,
         SettingsSection::Harnesses,
         SettingsSection::Agents,
         SettingsSection::Appearance,
@@ -431,7 +428,6 @@ impl SettingsSection {
     pub fn label(self) -> &'static str {
         match self {
             SettingsSection::Workspace => "Workspace",
-            SettingsSection::Devices => "Devices",
             SettingsSection::Harnesses => "Agents",
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
@@ -1403,7 +1399,6 @@ pub struct Shell {
     route: Route,
     /// Route history behind the titlebar back/forward buttons (§ nav history).
     nav: NavHistory,
-    devices_page: Option<Entity<DevicesPage>>,
     workspace_page: Option<Entity<WorkspacePage>>,
     workspace_sub: Option<Subscription>,
     private_transition: Option<PrivateTransition>,
@@ -1681,7 +1676,7 @@ impl Shell {
         // synthetic input can't reach them on headless compositors.
         let route = match std::env::var("ZERON_OPEN_ROUTE").ok().as_deref() {
             Some("settings") | Some("settings/devices") => {
-                Route::Settings(SettingsSection::Devices)
+                Route::Settings(SettingsSection::Workspace)
             }
             Some("settings/agents") => Route::Settings(SettingsSection::Agents),
             Some("settings/workspace") => Route::Settings(SettingsSection::Workspace),
@@ -1774,7 +1769,6 @@ impl Shell {
             right_tab_scroll: gpui::ScrollHandle::new(),
             route,
             nav,
-            devices_page: None,
             workspace_page: None,
             workspace_sub: None,
             private_transition: None,
@@ -3746,16 +3740,6 @@ impl Shell {
                     .map(|page| page.clone().into_any_element())
                     .unwrap_or_else(|| Empty.into_any_element())
             }
-            SettingsSection::Devices => {
-                if self.devices_page.is_none() {
-                    let state = self.state.clone();
-                    self.devices_page = Some(cx.new(|cx| DevicesPage::new(state, cx)));
-                }
-                match &self.devices_page {
-                    Some(page) => page.clone().into_any_element(),
-                    None => Empty.into_any_element(),
-                }
-            }
             SettingsSection::Harnesses => {
                 if self.harnesses_page.is_none() {
                     let state = self.state.clone();
@@ -4492,7 +4476,6 @@ impl Shell {
         self.private_transition = None;
         self.workspace_page = None;
         self.workspace_sub = None;
-        self.devices_page = None;
         self.accounts_page = None;
         self.harnesses_page = None;
         if import {
@@ -5661,7 +5644,6 @@ impl Shell {
     ) -> AnyElement {
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::Workspace => icons::GLOBAL,
-            SettingsSection::Devices => icons::MONITOR,
             SettingsSection::Harnesses => icons::WIDGET,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,
@@ -6767,7 +6749,7 @@ impl Shell {
                     popover::menu_row(theme, false, "user-menu-settings")
                         .id("user-menu-settings")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_settings(SettingsSection::Devices, cx)
+                            this.open_settings(SettingsSection::Workspace, cx)
                         }))
                         .child(
                             icon(icons::SETTINGS_MINIMALISTIC)
@@ -10081,7 +10063,7 @@ impl Render for Shell {
             // Native Settings menu item and the platform convention (Cmd+, on
             // macOS, Ctrl+, elsewhere) always land on the default section.
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
-                this.open_settings(SettingsSection::Devices, cx)
+                this.open_settings(SettingsSection::Workspace, cx)
             }))
             // Chat-scoped, unlike new-session — `cycle_session` holds the guard
             // and says why.
@@ -10678,7 +10660,7 @@ mod tests {
             (Route::Chat, None, Indicator::Working, false),
             (Route::Chat, Some("chat-a"), Indicator::Working, true),
             (
-                Route::Settings(SettingsSection::Devices),
+                Route::Settings(SettingsSection::Workspace),
                 Some("chat-a"),
                 Indicator::Working,
                 false,
@@ -11426,7 +11408,7 @@ mod tests {
     fn nav_push_then_back_and_forward() {
         let mut nav = NavHistory::new(chat("a"));
         nav.push(chat("b"));
-        nav.push(NavEntry::Settings(SettingsSection::Devices));
+        nav.push(NavEntry::Settings(SettingsSection::Workspace));
         assert!(nav.can_back());
         assert!(!nav.can_forward());
 
@@ -11445,7 +11427,7 @@ mod tests {
         assert_eq!(nav.forward(), Some(chat("b")));
         assert_eq!(
             nav.forward(),
-            Some(NavEntry::Settings(SettingsSection::Devices))
+            Some(NavEntry::Settings(SettingsSection::Workspace))
         );
         assert!(!nav.can_forward());
         assert_eq!(nav.forward(), None);
@@ -11494,12 +11476,12 @@ mod tests {
     #[test]
     fn nav_settings_sections_are_distinct_entries() {
         let mut nav = NavHistory::new(chat("a"));
-        nav.push(NavEntry::Settings(SettingsSection::Devices));
+        nav.push(NavEntry::Settings(SettingsSection::Workspace));
         nav.push(NavEntry::Settings(SettingsSection::Shortcuts));
         assert_eq!(nav.len(), 3, "section changes are navigations");
         assert_eq!(
             nav.back(),
-            Some(NavEntry::Settings(SettingsSection::Devices))
+            Some(NavEntry::Settings(SettingsSection::Workspace))
         );
         assert_eq!(nav.back(), Some(chat("a")));
     }
@@ -11916,7 +11898,7 @@ mod exit_regressions {
                     "new" => shell.open_new_session(cx),
                     "back" => shell.apply_nav(NavEntry::Chat("existing-session".into()), cx),
                     "settings" => {
-                        shell.open_settings(SettingsSection::Devices, cx);
+                        shell.open_settings(SettingsSection::Workspace, cx);
                         shell.close_settings(cx);
                     }
                     _ => {}
@@ -12520,7 +12502,7 @@ impl Shell {
         self.toggle_right_pane_expand(cx);
     }
     pub fn fixture_blur_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.route = Route::Settings(SettingsSection::Devices);
+        self.route = Route::Settings(SettingsSection::Workspace);
         window.blur();
         cx.notify();
     }

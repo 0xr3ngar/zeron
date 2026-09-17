@@ -142,7 +142,7 @@ impl Shell {
         match entry {
             Entry::NewChat => self.open_new_session(cx),
             Entry::NewProject => self.open_add_space(cx),
-            Entry::Settings => self.open_settings(SettingsSection::Devices, cx),
+            Entry::Settings => self.open_settings(SettingsSection::Workspace, cx),
             Entry::Chat(id) => self.open_chat(id, cx),
         }
     }
