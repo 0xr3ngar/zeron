@@ -11830,6 +11830,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeron-private"
+version = "0.2.72"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "zeron-doc",
+ "zeron-rpc",
+ "zeron-sync",
+]
+
+[[package]]
 name = "zeron-proto"
 version = "0.2.72"
 dependencies = [

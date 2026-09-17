@@ -37,7 +37,15 @@ pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// [`crate::wake::notify_online`] so sibling sockets waiting out a reconnect
 /// backoff redial immediately instead of sleeping through the recovery.
 pub async fn connect_ws(url: &str) -> Result<WsStream, WsError> {
-    let request = url.into_client_request()?;
+    connect_ws_with_bearer(url, None).await
+}
+
+pub async fn connect_ws_with_bearer(url: &str, bearer: Option<&str>) -> Result<WsStream, WsError> {
+    let mut request = url.into_client_request()?;
+    if let Some(bearer) = bearer {
+        let value = format!("Bearer {bearer}").parse()?;
+        request.headers_mut().insert("authorization", value);
+    }
     let uri = request.uri();
     let host = uri
         .host()
