@@ -231,7 +231,16 @@ impl Harness for CursorHarness {
                 let _ = self.models_cache.set(models.clone());
                 Ok(models)
             }
-            Ok(_) | Err(_) => Ok(static_models()),
+            Ok(_) => {
+                tracing::warn!(
+                    "cursor model discovery returned an empty catalog; using fallback models"
+                );
+                Ok(static_models())
+            }
+            Err(error) => {
+                tracing::warn!(%error, "cursor model discovery failed; using fallback models");
+                Ok(static_models())
+            }
         }
     }
 
