@@ -106,6 +106,7 @@ impl WorkspaceDoc {
         set_opt_ms(&row, "lastSeenAt", device.last_seen_at)?;
         set_opt_ms(&row, "createdAt", device.created_at)?;
         set_opt_str(&row, "version", device.version.as_deref())?;
+        set_opt_str(&row, "role", device.role.as_deref())?;
         row.insert(
             "capabilities",
             crate::schema::loro_value_from_json(&serde_json::json!(&device.capabilities)),
@@ -595,6 +596,8 @@ fn dt(ms: i64) -> DateTime<Utc> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RawDevice {
+    #[serde(default)]
+    role: Option<String>,
     id: String,
     name: String,
     platform: String,
@@ -614,6 +617,7 @@ impl From<RawDevice> for Device {
             id: raw.id,
             name: raw.name,
             platform: raw.platform,
+            role: raw.role,
             last_seen_at: raw.last_seen_at.map(dt),
             created_at: raw.created_at.map(dt),
             version: raw.version,
@@ -778,6 +782,7 @@ mod tests {
 
     fn device(id: &str, name: &str) -> Device {
         Device {
+            role: None,
             id: id.into(),
             name: name.into(),
             platform: "linux".into(),
