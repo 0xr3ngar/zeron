@@ -44,16 +44,24 @@ import path from "node:path";
 import readline from "node:readline";
 
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
-const fatal = (message) => {
+// stdout is a pipe. Exit only after queued frames have reached the reader.
+async function flushAndExit(code) {
+  await new Promise((resolve, reject) => {
+    process.stdout.write("", (error) => error ? reject(error) : resolve());
+  });
+  process.exit(code);
+}
+
+const fatal = async (message) => {
   out({ ev: "fatal", message: String(message) });
-  process.exit(1);
+  await flushAndExit(1);
 };
 
 let sdk;
 try {
   sdk = await import("@cursor/sdk");
 } catch (e) {
-  fatal(`@cursor/sdk failed to load: ${e?.message ?? e}`);
+  await fatal(`@cursor/sdk failed to load: ${e?.message ?? e}`);
 }
 const { Agent, Cursor, FileCredentialStore, JsonlLocalAgentStore } = sdk;
 
@@ -116,9 +124,9 @@ if (process.argv[2] === "models") {
     const listed = await Cursor.models.list();
     const items = Array.isArray(listed) ? listed : (listed?.items ?? []);
     out({ ev: "models", items });
-    process.exit(0);
+    await flushAndExit(0);
   } catch (e) {
-    fatal(`cursor model discovery failed: ${e?.message ?? e}`);
+    await fatal(`cursor model discovery failed: ${e?.message ?? e}`);
   }
 }
 
@@ -128,7 +136,7 @@ if (process.argv[2] === "models") {
 // minted key lands in the engine-chosen store file, never the live login.
 if (process.argv[2] === "login") {
   const storePath = process.argv[3];
-  if (!storePath) fatal("login mode needs a store path");
+  if (!storePath) await fatal("login mode needs a store path");
   try {
     const result = await Cursor.auth.login({
       openBrowser: false,
@@ -141,9 +149,9 @@ if (process.argv[2] === "login") {
       ...(result?.email ? { email: result.email } : {}),
       ...(result?.apiKeyExpiresAtMs ? { expiresAtMs: result.apiKeyExpiresAtMs } : {}),
     });
-    process.exit(0);
+    await flushAndExit(0);
   } catch (e) {
-    fatal(`cursor login failed: ${e?.message ?? e}`);
+    await fatal(`cursor login failed: ${e?.message ?? e}`);
   }
 }
 
@@ -317,13 +325,13 @@ async function start(msg) {
     // `cursor-agent login` (verified) — name the fix precisely.
     const auth = await Cursor.auth.status().catch(() => null);
     if (!process.env.CURSOR_API_KEY && auth?.status !== "logged-in") {
-      fatal(
+      await fatal(
         "Cursor is not connected (its login is separate from " +
           "`cursor-agent login`): connect it in Settings → Accounts, or set " +
           `CURSOR_API_KEY from cursor.com/settings, then retry. (${e?.message ?? e})`,
       );
     }
-    fatal(`cursor agent failed to start: ${e?.message ?? e}`);
+    await fatal(`cursor agent failed to start: ${e?.message ?? e}`);
   }
   if (runDir) rememberAgentDir(agent.agentId, runDir);
   out({ ev: "ready", agentId: agent.agentId, model: agent.model?.id ?? model.id });
@@ -362,10 +370,10 @@ rl.on("close", () => {
   // stdin EOF: the engine is done with the session.
   const r = run;
   run = null;
-  (r ? r.cancel().catch(() => {}) : Promise.resolve()).finally(() => {
+  (r ? r.cancel().catch(() => {}) : Promise.resolve()).finally(async () => {
     try {
       agent?.close();
     } catch {}
-    process.exit(0);
+    await flushAndExit(0);
   });
 });

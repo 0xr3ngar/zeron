@@ -1,5 +1,5 @@
 //! CursorHarness integration tests against the fake shim in
-//! `tests/fixtures/fake-cursor-shim.sh` (no node/@cursor/sdk involved).
+//! `tests/fixtures/fake-cursor-shim.sh`, plus a real Node shim test with a fake SDK.
 
 #![cfg(unix)]
 
@@ -317,4 +317,50 @@ async fn model_discovery_maps_the_live_catalog() {
     // A parameter without displayName labels by id; default = first value.
     assert_eq!(models[1].options[0].id, "thinking");
     assert_eq!(models[1].options[0].default_choice, "enabled");
+}
+
+#[tokio::test]
+async fn real_shim_flushes_large_catalog_before_exiting() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("node_modules/@cursor/sdk");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"type":"module","exports":"./index.js"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("index.js"),
+        r#"export const Cursor = { models: { list: async () =>
+            Array.from({length: 512}, (_, i) => ({
+                id: `model-${i}`, displayName: `Model ${i}`,
+                description: 'x'.repeat(1024)
+            }))
+        }};"#,
+    )
+    .unwrap();
+    let shim = dir.path().join("shim.mjs");
+    std::fs::write(&shim, include_str!("../src/cursor/shim.mjs")).unwrap();
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new("node")
+            .arg(shim)
+            .arg("models")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("shim timed out")
+    .expect("Node is required to test the Cursor shim");
+    assert!(output.status.success(), "{:?}", output.status);
+    let frame: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "catalog truncated at {} bytes: {error}",
+            output.stdout.len()
+        )
+    });
+    assert_eq!(frame["ev"], "models");
+    let items = frame["items"].as_array().unwrap();
+    assert_eq!(items.len(), 512);
+    assert_eq!(items[511]["id"], "model-511");
 }
