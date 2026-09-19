@@ -41,6 +41,7 @@ use crate::settings::archived::ArchivedPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::harnesses::HarnessesPage;
 use crate::settings::notifications::{NotificationsEvent, NotificationsPage};
+use crate::settings::profile::{self, ProfilePage};
 use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
 use crate::settings::workspace::{WorkspaceEvent, WorkspacePage};
 use crate::settings::{
@@ -430,6 +431,7 @@ pub fn apply_keymap(
 /// The settings sections (feature-inventory §1.5 routes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
+    Profile,
     Workspace,
     /// Which harnesses the composer offers (enable/disable toggles).
     Harnesses,
@@ -444,7 +446,8 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 9] = [
+    pub const ALL: [SettingsSection; 10] = [
+        SettingsSection::Profile,
         SettingsSection::Workspace,
         SettingsSection::Harnesses,
         SettingsSection::Agents,
@@ -460,6 +463,7 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
+            SettingsSection::Profile => "Profile",
             SettingsSection::Workspace => "Workspace",
             SettingsSection::Harnesses => "Agents",
             SettingsSection::Agents => "Accounts",
@@ -1232,7 +1236,6 @@ fn resolve_shell_escape(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AccountMenuAction {
     EnableSync,
-    PrivateWorkspace,
     SyncInProgress,
     /// Postponed switch wizard (or legacy restart fallback) — reopen it.
     RestartPending,
@@ -1375,7 +1378,7 @@ fn account_menu_action(scope: Option<WorkspaceScope>, flow: SyncFlow) -> Option<
         Some(WorkspaceScope::Private) => match flow {
             SyncFlow::ImportFailed { .. } => Some(AccountMenuAction::RestartPending),
             _ if flow.is_switch_lifecycle() => Some(AccountMenuAction::SyncInProgress),
-            _ => Some(AccountMenuAction::PrivateWorkspace),
+            _ => None,
         },
         Some(WorkspaceScope::Development) | None => None,
     }
@@ -1570,6 +1573,7 @@ pub struct Shell {
     private_transition: Option<PrivateTransition>,
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
+    profile_page: Option<Entity<ProfilePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
     notifications_page: Option<Entity<NotificationsPage>>,
     shortcuts_page: Option<Entity<ShortcutsPage>>,
@@ -1859,6 +1863,7 @@ impl Shell {
             Some("settings/workspace") => Route::Settings(SettingsSection::Workspace),
             Some("settings/harnesses") => Route::Settings(SettingsSection::Harnesses),
             Some("settings/appearance") => Route::Settings(SettingsSection::Appearance),
+            Some("settings/profile") => Route::Settings(SettingsSection::Profile),
             Some("settings/notifications") => Route::Settings(SettingsSection::Notifications),
             Some("settings/shortcuts") => Route::Settings(SettingsSection::Shortcuts),
             Some("settings/appshots") => Route::Settings(SettingsSection::Appshots),
@@ -1952,6 +1957,7 @@ impl Shell {
             private_transition: None,
             archived_page: None,
             appearance_page: None,
+            profile_page: None,
             files_settings_page: None,
             notifications_page: None,
             shortcuts_page: None,
@@ -3776,6 +3782,8 @@ impl Shell {
     /// keeps this block on a single source.
     fn sync_independent_settings(&mut self, cx: &App) {
         let current = settings::current(cx);
+        self.settings.profile = current.profile;
+        self.settings.blur_emails = current.blur_emails;
         self.settings.window_geometry = current.window_geometry;
         self.settings.new_thread_composer_background = current.new_thread_composer_background;
         self.settings.new_thread_background_effect = current.new_thread_background_effect;
@@ -3994,6 +4002,11 @@ impl Shell {
                     None => Empty.into_any_element(),
                 }
             }
+            SettingsSection::Profile => self
+                .profile_page
+                .get_or_insert_with(|| cx.new(ProfilePage::new))
+                .clone()
+                .into_any_element(),
             SettingsSection::Appearance => {
                 if self.appearance_page.is_none() {
                     let page = cx.new(AppearancePage::new);
@@ -6036,6 +6049,7 @@ impl Shell {
     ) -> AnyElement {
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::Workspace => icons::GLOBAL,
+            SettingsSection::Profile => icons::PEN_NEW_SQUARE,
             SettingsSection::Harnesses => icons::WIDGET,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,
@@ -7100,43 +7114,39 @@ impl Shell {
         // t3code's archived accordion, below the active list.
         let archived_section = self.render_archived_section(theme, cx);
 
-        let (user_line, trigger_subline, menu_identity): (
-            SharedString,
-            Option<SharedString>,
-            SharedString,
-        ) = match workspace_scope {
-            Some(WorkspaceScope::Local) => {
-                let line = if matches!(self.sync_flow, SyncFlow::RestartPending { .. }) {
-                    "Sync ready after restart"
-                } else {
-                    "Local only"
-                };
-                (line.into(), None, "Stored on this device".into())
+        let profile = settings::current(cx).profile;
+        let user_line: SharedString = profile
+            .display_name()
+            .map(str::to_owned)
+            .or_else(|| {
+                user.as_ref()
+                    .map(|user| user.name.clone().unwrap_or_else(|| user.email.clone()))
+            })
+            .unwrap_or_else(|| "Your profile".into())
+            .into();
+        let trigger_subline = match workspace_scope {
+            Some(WorkspaceScope::Local)
+                if matches!(self.sync_flow, SyncFlow::RestartPending { .. }) =>
+            {
+                "Sync ready after restart"
             }
-            Some(WorkspaceScope::Development) => (
-                "Development".into(),
-                Some("Local development runtime".into()),
-                "Authentication disabled".into(),
-            ),
-            Some(WorkspaceScope::Private) => (
-                "Private workspace".into(),
-                Some("Via Tailscale".into()),
-                "Synced through your private hub".into(),
-            ),
-            Some(WorkspaceScope::Synced) | None => {
-                let line: SharedString = user
-                    .as_ref()
-                    .map(|u| u.name.clone().unwrap_or_else(|| u.email.clone()).into())
-                    .unwrap_or_else(|| SharedString::from("Not signed in"));
-                let email = user
-                    .as_ref()
-                    .map(|u| SharedString::from(u.email.clone()))
-                    .unwrap_or_else(|| line.clone());
-                (line, Some("Alpha".into()), email)
-            }
+            Some(WorkspaceScope::Local) => "Local only",
+            Some(WorkspaceScope::Development) => "Development",
+            Some(WorkspaceScope::Private) => "Private workspace",
+            Some(WorkspaceScope::Synced) => "Synced workspace",
+            None => "Connecting…",
         };
-        let user_menu =
-            self.render_user_menu(user_line.clone(), trigger_subline, menu_identity, theme, cx);
+        let menu_identity = user
+            .as_ref()
+            .map(|user| SharedString::from(user.email.clone()));
+        let user_menu = self.render_user_menu(
+            user_line,
+            trigger_subline.into(),
+            menu_identity,
+            &profile,
+            theme,
+            cx,
+        );
 
         // The space filter lives ABOVE the scroll region (fixed) so its
         // dropdown can float without being clipped by the list's overflow.
@@ -7486,22 +7496,15 @@ impl Shell {
     fn render_user_menu(
         &mut self,
         user_line: SharedString,
-        trigger_subline: Option<SharedString>,
-        menu_identity: SharedString,
+        trigger_subline: SharedString,
+        menu_identity: Option<SharedString>,
+        profile: &profile::Profile,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = &theme.for_popup();
         let open = self.user_menu.is_open();
         let action = account_menu_action(self.state.read(cx).workspace_scope, self.sync_flow);
-        // Bottom-of-sidebar identity: avatar circle + scope/account label and
-        // its secondary status line.
-        let initial: SharedString = user_line
-            .chars()
-            .next()
-            .map(|c| c.to_uppercase().to_string())
-            .unwrap_or_else(|| "?".into())
-            .into();
         let mut trigger = div()
             .id("user-menu")
             .flex_none()
@@ -7540,21 +7543,7 @@ impl Shell {
                 }
                 cx.notify();
             }))
-            .child(
-                // Avatar: white circle, initial in near-black (zeron user-menu.tsx).
-                div()
-                    .size(px(28.0))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(theme.text)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.bg)
-                    .child(initial),
-            )
+            .child(profile::avatar(profile, &user_line, 28.0, theme))
             .child(
                 // Name with an optional status line underneath — no chip on the right.
                 div()
@@ -7565,29 +7554,23 @@ impl Shell {
                     .child(
                         div()
                             .text_size(crate::typography::ui_rems(13.0))
-                            .line_height(px(17.0))
+                            .line_height(crate::typography::ui_rems(17.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.text)
                             .truncate()
-                            .child(user_line.clone()),
+                            .child(crate::privacy::identity(user_line.clone(), cx)),
                     )
-                    .when_some(trigger_subline, |identity, subline| {
-                        identity.child(
-                            div()
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .line_height(px(15.0))
-                                .text_color(theme.text_muted)
-                                .child(subline),
-                        )
-                    }),
+                    .child(
+                        div()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .line_height(crate::typography::ui_rems(15.0))
+                            .text_color(theme.text_muted)
+                            .truncate()
+                            .child(trigger_subline),
+                    ),
             );
         if self.user_menu.get().is_some() {
             let closing = self.user_menu.closing_since();
-            // user-menu.tsx content: `w-[--radix-dropdown-menu-trigger-width]`
-            // (exactly as wide as the trigger row — sidebar minus its p-2
-            // gutters), `flex-col gap-0.5`, then: one small muted email line
-            // (`px-2 pb-1 pt-1.5 text-[11px] text-muted-foreground/70`),
-            // the action selected by the runtime scope, then "Settings".
             let menu = popover::popover_card(theme)
                 .w(px(self.settings.sidebar_width - 2.0 * Theme::SPACE_SM))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -7596,15 +7579,29 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
+                .when_some(menu_identity, |menu, identity| {
+                    menu.child(
+                        div()
+                            .px(px(8.0))
+                            .pt(px(6.0))
+                            .pb(px(4.0))
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.text_muted)
+                            .child(crate::privacy::identity(identity, cx)),
+                    )
+                })
                 .child(
-                    div()
-                        .px(px(8.0))
-                        .pt(px(6.0))
-                        .pb(px(4.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
-                        .truncate()
-                        .child(menu_identity),
+                    popover::menu_row(theme, false, "user-menu-profile")
+                        .id("user-menu-profile")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_settings(SettingsSection::Profile, cx)
+                        }))
+                        .child(
+                            icon(icons::PEN_NEW_SQUARE)
+                                .size(px(16.0))
+                                .text_color(theme.text_muted),
+                        )
+                        .child("Edit profile"),
                 )
                 .when_some(action, |menu, action| {
                     let row = match action {
@@ -7620,20 +7617,6 @@ impl Shell {
                                         .text_color(theme.text_muted),
                                 )
                                 .child(SharedString::from("Set up sync"))
-                                .into_any_element()
-                        }
-                        AccountMenuAction::PrivateWorkspace => {
-                            popover::menu_row(theme, false, "user-menu-private-workspace")
-                                .id("user-menu-private-workspace")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.open_settings(SettingsSection::Workspace, cx)
-                                }))
-                                .child(
-                                    icon(icons::GLOBAL)
-                                        .size(px(16.0))
-                                        .text_color(theme.text_muted),
-                                )
-                                .child("Private workspace settings")
                                 .into_any_element()
                         }
                         AccountMenuAction::SyncInProgress => {
@@ -7781,20 +7764,9 @@ impl Shell {
             // ── in-place switch wizard ────────────────────────────────────
             SyncFlow::SwitchOffer { notice_open: true } => {
                 let has_local_work = work_phrase.is_some();
-                let body: SharedString = match (&signed_in_email, &work_phrase) {
-                    (Some(email), Some(phrase)) => format!(
-                        "You're signed in as {email}. Bring {phrase} from this device into your synced workspace, or start it fresh."
-                    )
-                    .into(),
-                    (Some(email), None) => format!(
-                        "You're signed in as {email}. Zeron can switch to your synced workspace now."
-                    )
-                    .into(),
-                    (None, Some(phrase)) => format!(
-                        "Bring {phrase} from this device into your synced workspace, or start it fresh."
-                    )
-                    .into(),
-                    (None, None) => "Zeron can switch to your synced workspace now.".into(),
+                let body: SharedString = match &work_phrase {
+                    Some(phrase) => format!("Bring {phrase} from this device into your synced workspace, or start it fresh.").into(),
+                    None => "Zeron can switch to your synced workspace now.".into(),
                 };
                 let mut actions = div()
                     .mt(px(16.0))
@@ -7836,6 +7808,13 @@ impl Shell {
                 }
                 popover::dialog_card(&theme)
                     .child(popover::dialog_title(&theme, "Sync is ready"))
+                    .when_some(signed_in_email, |card, email| card.child(
+                        div().flex().flex_wrap().gap(px(4.0)).mt(px(8.0))
+                            .text_size(crate::typography::ui_rems(13.0))
+                            .text_color(theme.text_muted)
+                            .child("Signed in as")
+                            .child(crate::privacy::identity(email, cx)),
+                    ))
                     .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, body)))
                     .child(actions)
                     .into_any_element()
@@ -10339,16 +10318,7 @@ impl Shell {
         // zeron App.tsx OrgGate: w-400 card on the grid — logo, headline,
         // explainer (+ signed-in email), name form with a white Create button,
         // then existing memberships and the account escape hatch.
-        let blurb: SharedString = match email {
-            Some(email) => format!(
-                "Zeron is organized around workspaces — create one for yourself or your team. Signed in as {email}."
-            )
-            .into(),
-            None => {
-                "Zeron is organized around workspaces — create one for yourself or your team."
-                    .into()
-            }
-        };
+        let blurb = "Zeron is organized around workspaces — create one for yourself or your team.";
         let card = div()
             .w(px(400.0))
             .px(px(32.0))
@@ -10381,7 +10351,18 @@ impl Shell {
                     .text_size(crate::typography::ui_rems(13.0))
                     .line_height(px(19.0))
                     .text_color(theme.text_muted)
-                    .child(blurb),
+                    .child(blurb)
+                    .when_some(email, |description, email| {
+                        description.child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap(px(4.0))
+                                .mt(px(8.0))
+                                .child("Signed in as")
+                                .child(crate::privacy::identity(email, cx)),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -11723,7 +11704,7 @@ mod tests {
     fn private_workspace_does_not_offer_cloud_sign_in_or_sign_out() {
         assert_eq!(
             account_menu_action(Some(WorkspaceScope::Private), SyncFlow::Idle),
-            Some(AccountMenuAction::PrivateWorkspace)
+            None
         );
         assert_eq!(
             sync_flow_after_auth(
@@ -11903,6 +11884,10 @@ mod tests {
         );
         assert_eq!(
             account_menu_action(Some(WorkspaceScope::Development), SyncFlow::Idle),
+            None
+        );
+        assert_eq!(
+            account_menu_action(Some(WorkspaceScope::Private), SyncFlow::Idle),
             None
         );
     }
@@ -12740,6 +12725,8 @@ mod exit_regressions {
                         settings.code_font_family = code_family.clone();
                         settings.code_font_size = code_size;
                         settings.transcript_width = transcript_width;
+                        settings.profile.name = Some("Custom profile".into());
+                        settings.blur_emails = true;
                     });
                     for step in 0..3 {
                         shell.settings.sidebar_width = 290.0 + step as f32;
@@ -12755,6 +12742,8 @@ mod exit_regressions {
                         assert_eq!(current.code_font_family, code_family);
                         assert_eq!(current.code_font_size, code_size);
                         assert_eq!(current.transcript_width, transcript_width);
+                        assert_eq!(current.profile.display_name(), Some("Custom profile"));
+                        assert!(current.blur_emails);
                     }
                     settings::flush(cx);
                     let loaded = settings::UiSettings::load(dir.path());
@@ -12766,6 +12755,8 @@ mod exit_regressions {
                     assert_eq!(loaded.code_font_family, code_family);
                     assert_eq!(loaded.code_font_size, code_size);
                     assert_eq!(loaded.transcript_width, transcript_width);
+                    assert_eq!(loaded.profile.display_name(), Some("Custom profile"));
+                    assert!(loaded.blur_emails);
                     assert_eq!(loaded.sidebar_width, 292.0);
                     assert_eq!(loaded.right_pane_width, 542.0);
                     assert_eq!(loaded.terminal_height, 302.0);
