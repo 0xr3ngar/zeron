@@ -5866,10 +5866,7 @@ impl Shell {
         archived: bool,
         preview: bool,
         drag: Option<SidebarSessionDrag>,
-        // This row's jump combo while the hint overlay is up. It takes the
-        // corner outright — above hover and above the status word — so all
-        // nine chips appear together instead of leaving a hole on whichever
-        // row is busy or under the pointer.
+        // Reserve the shortcut's width even while its hint is hidden.
         jump_label: Option<SharedString>,
         search_query: Option<&str>,
         theme: &Theme,
@@ -5983,8 +5980,10 @@ impl Shell {
                 .child(glyph)
                 .into_any_element()
         });
-        let compact_jump_label = compact.then(|| jump_label.clone()).flatten();
-        let corner_body: AnyElement = if let Some(label) = jump_label.filter(|_| !compact) {
+        let show_jump_hint = self.jump_hints && !self.overlay_owns_keyboard(cx);
+        let compact_jump_label = jump_label.clone().filter(|_| compact && show_jump_hint);
+        let corner_jump_label = jump_label.clone().filter(|_| !compact && show_jump_hint);
+        let corner_body: AnyElement = if let Some(label) = corner_jump_label {
             // The jump hint replaces the status/time corner while the modifier
             // is held, cut to the sidebar PR badge's exact cloth
             // (`pull_request_badge`, Sidebar surface): pinned 16px, px 4,
@@ -6006,6 +6005,7 @@ impl Shell {
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(tone.opacity(0.85))
                     .font_family(theme.font_mono.clone())
+                    .whitespace_nowrap()
                     .child(label)
                     .into_any_element()
             }
@@ -6369,12 +6369,26 @@ impl Shell {
                                     let id = id.clone();
                                     move || format!("chat-time-{id}")
                                 })
-                                .w(px(30.0))
+                                .relative()
+                                .min_w(px(30.0))
+                                .h(px(17.0))
                                 .flex_none()
                                 .text_right()
                                 .text_size(crate::typography::ui_rems(11.0))
+                                .line_height(px(17.0))
+                                .whitespace_nowrap()
                                 .text_color(subline)
-                                .child(compact_jump_label.unwrap_or(time_ago)),
+                                .child(
+                                    div().invisible().child(
+                                        jump_label.clone().unwrap_or_else(|| time_ago.clone()),
+                                    ),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .child(compact_jump_label.unwrap_or(time_ago)),
+                                ),
                         )
                     }),
             )
@@ -13498,6 +13512,115 @@ mod zoom_tests {
     use super::*;
     use crate::typography::{self, FontAvailability, UiFontSize};
     use gpui::{AppContext, TestAppContext};
+
+    #[gpui::test]
+    fn zoomed_session_jump_hints_keep_rows_still_and_shortcuts_work(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            settings::init(UiSettings::default(), dir.path(), cx);
+            typography::init(
+                Default::default(),
+                UiFontSize::default(),
+                Default::default(),
+                typography::TERMINAL_FONT_SIZE_DEFAULT,
+                Default::default(),
+                typography::CODE_FONT_SIZE_DEFAULT,
+                FontAvailability::all(),
+                cx,
+            );
+        });
+        let (shell, cx) = cx.add_window_view(|window, cx| {
+            window.set_rem_size(px(16.0));
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.connection = zeron_proto::view::ConnectionStatus::Ready;
+                state.workspace_scope = Some(WorkspaceScope::Local);
+                state.local_device_id = Some("local".into());
+                state.chats = ["first", "second"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ix, id)| {
+                        serde_json::from_value(serde_json::json!({
+                            "id": id, "title": format!("Session {id}"), "deviceId": "local",
+                            "archived": false,
+                            "createdAt": Utc::now() - chrono::Duration::minutes(ix as i64 + 1),
+                        }))
+                        .unwrap()
+                    })
+                    .collect();
+                state
+            });
+            let mut shell = Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            );
+            shell.splash = SplashPhase::Gone;
+            shell.reduced_motion = true;
+            shell
+        });
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        for _ in 0..2 {
+            cx.simulate_keystrokes(&platform_combo("mod-="));
+        }
+        cx.update(|window, _| assert_eq!(window.rem_size(), px(20.0)));
+        for organization in [
+            SidebarOrganization::InOneList,
+            SidebarOrganization::ByDevice,
+        ] {
+            shell.update(cx, |shell, cx| {
+                shell.settings.sidebar_organization = organization;
+                cx.notify();
+            });
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+            });
+            let title = cx.debug_bounds("chat-title-first").unwrap();
+            let row = cx.debug_bounds("chat-first").unwrap();
+            cx.simulate_modifiers_change(gpui::Modifiers {
+                control: !cfg!(target_os = "macos"),
+                platform: cfg!(target_os = "macos"),
+                ..Default::default()
+            });
+            shell.read_with(cx, |shell, _| assert!(shell.jump_hints));
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+            });
+            let hinted_title = cx.debug_bounds("chat-title-first").unwrap();
+            let hinted_row = cx.debug_bounds("chat-first").unwrap();
+            // Compare within the row, independently of the page's entrance animation.
+            assert_eq!(
+                hinted_title.origin - hinted_row.origin,
+                title.origin - row.origin,
+                "holding the jump modifier must not move the title within its row"
+            );
+            assert_eq!(hinted_title.size, title.size);
+            assert_eq!(hinted_row.size, row.size);
+            for (combo, expected) in [("mod-2", "second"), ("mod-1", "first")] {
+                cx.simulate_keystrokes(&platform_combo(combo));
+                shell.read_with(cx, |shell, cx| {
+                    assert_eq!(
+                        shell.state.read(cx).selected_chat.as_deref(),
+                        Some(expected)
+                    );
+                });
+            }
+            cx.simulate_modifiers_change(Default::default());
+        }
+    }
 
     #[gpui::test]
     fn zoom_shortcuts_resize_persist_reset_and_rebind(cx: &mut TestAppContext) {
