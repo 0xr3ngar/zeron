@@ -1,9 +1,9 @@
 //! Account identities share one privacy treatment, including email fallbacks
 //! used in place of a display name.
 
-use gpui::{AnyElement, App, Corners, SharedString, canvas, div, prelude::*, px};
+use gpui::{AnyElement, App, SharedString, div, prelude::*};
 
-use crate::{frost, settings, typography::ui_rems};
+use crate::{icons, settings, theme::Theme, typography::ui_rems};
 
 #[derive(Debug, PartialEq, Eq)]
 enum IdentityLabel {
@@ -39,32 +39,68 @@ pub fn identity(text: impl Into<SharedString>, cx: &App) -> AnyElement {
         return div().min_w_0().truncate().child(text).into_any_element();
     }
 
-    // Never put the address beneath the effect: unsupported renderers,
-    // accessibility, and transitions must not reveal the original text.
+    // The mask contains only placeholder text, with transparent space for the
+    // blur to fade out. No address or backdrop is drawn beneath it.
     div()
         .relative()
         .min_w_0()
         .w(ui_rems(128.0))
         .max_w_full()
-        .overflow_hidden()
-        .rounded(px(5.0))
-        .child(div().truncate().opacity(0.5).child("hidden@email.com"))
-        .child(frost::layered(
-            canvas(
-                |_, _, _| (),
-                move |bounds, _, window, _| {
-                    window.paint_backdrop_blur(bounds, Corners::all(px(5.0)), px(3.0));
-                },
-            )
-            .absolute()
-            .inset_0(),
-        ))
+        .child(div().invisible().child("Email hidden"))
+        .child(
+            icons::icon(icons::EMAIL_HIDDEN)
+                .absolute()
+                .inset_0()
+                .size_full()
+                .text_color(Theme::of(cx).text_muted),
+        )
         .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn email_mask_fades_to_transparent_before_its_edges() {
+        let renderer = gpui::SvgRenderer::new(std::sync::Arc::new(icons::Assets));
+        for scale in [1.0, 1.25, 2.0] {
+            let image = renderer
+                .render_single_frame(include_bytes!("../assets/icons/email-hidden.svg"), scale)
+                .unwrap();
+            let size = image.size(0);
+            let width = size.width.0 as usize;
+            let height = size.height.0 as usize;
+            let alpha: Vec<u8> = image
+                .as_bytes(0)
+                .unwrap()
+                .chunks_exact(4)
+                .map(|pixel| pixel[3])
+                .collect();
+            assert!(alpha.iter().any(|alpha| *alpha > 30), "mask is invisible");
+            assert!(
+                alpha
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    > 20,
+                "mask lost its soft falloff"
+            );
+            for x in 0..width {
+                assert!(
+                    alpha[x] <= 1 && alpha[(height - 1) * width + x] <= 1,
+                    "vertical blur is clipped"
+                );
+            }
+            for y in 0..height {
+                assert!(
+                    alpha[y * width] <= 1 && alpha[y * width + width - 1] <= 1,
+                    "horizontal blur is clipped"
+                );
+            }
+        }
+    }
 
     #[test]
     fn privacy_removes_addresses_but_keeps_names_and_github_handles() {
