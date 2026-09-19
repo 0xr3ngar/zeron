@@ -47,6 +47,9 @@ pub struct EngineInfo {
     pub workspace_scope: WorkspaceScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_workspace_id: Option<String>,
+    /// SDK selected by the owning engine, absent on older versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_sdk_version: Option<String>,
     /// Supported protocol/document features. Missing on older engines.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
@@ -83,6 +86,7 @@ mod tests {
             private_workspace_id: None,
             device_id: "device-1".into(),
             workspace_scope: WorkspaceScope::Local,
+            cursor_sdk_version: Some("1.0.31".into()),
             capabilities: capabilities::current(),
         };
         assert_eq!(
@@ -90,6 +94,7 @@ mod tests {
             serde_json::json!({
                 "deviceId": "device-1",
                 "workspaceScope": "local",
+                "cursorSdkVersion": "1.0.31",
                 "capabilities": [
                     "message-queue-v1",
                     "message-queue-actions-v1",
@@ -109,6 +114,7 @@ mod tests {
         }))
         .unwrap();
         assert!(info.capabilities.is_empty());
+        assert!(info.cursor_sdk_version.is_none());
         assert!(!info.supports(capabilities::MESSAGE_QUEUE_V1));
     }
 }

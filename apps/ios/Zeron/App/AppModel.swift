@@ -20,6 +20,7 @@ final class AppModel {
     var phase: Phase = .signedOut
     var workspace: WorkspaceStore?
     var demo: DemoDataset?
+    var demoPinnedSessionIds: [String] = []
     /// Graced connectivity truth — one stream every consumer inherits calm
     /// from (home pill, composer notice, Queued/Failed badges).
     let connectivity = ConnectivityCenter()
@@ -275,6 +276,7 @@ final class AppModel {
 
     func enterDemoMode() {
         demo = DemoDataset.standard()
+        demoPinnedSessionIds = []
         phase = .ready
     }
 
@@ -304,6 +306,7 @@ final class AppModel {
         config = nil
         demo = nil
         AttachmentImageCache.shared.reset()
+        demoPinnedSessionIds = []
     }
 
     private func devBearer(userId: String, orgId: String) -> String {
@@ -365,14 +368,17 @@ final class AppModel {
         if let demo {
             let liveIds = Set(demo.spaces.map(\.id))
             let live = demo.chats.filter { !$0.archived && ($0.spaceId.map(liveIds.contains) ?? true) }
-            return sortActive(live)
+            return sortPinnedFirst(live, pinnedSessionIds: demoPinnedSessionIds)
         }
         return workspace?.overviewChats ?? []
     }
 
     func chats(in spaceId: String) -> [Chat] {
         if let demo {
-            return sortActive(demo.chats.filter { !$0.archived && $0.spaceId == spaceId })
+            return sortPinnedFirst(
+                demo.chats.filter { !$0.archived && $0.spaceId == spaceId },
+                pinnedSessionIds: demoPinnedSessionIds
+            )
         }
         return workspace?.chats(in: spaceId) ?? []
     }
@@ -582,6 +588,30 @@ final class AppModel {
 
     func archive(chatId: String) { setArchived(chatId: chatId, archived: true) }
     func unarchive(chatId: String) { setArchived(chatId: chatId, archived: false) }
+
+    var pinsReady: Bool {
+        if demo != nil { return true }
+        guard let workspace else { return false }
+        return workspace.synced || workspace.sidebarPreferencesInitialized
+    }
+
+    func isPinned(chatId: String) -> Bool {
+        (demo != nil ? demoPinnedSessionIds : workspace?.pinnedSessionIds ?? []).contains(chatId)
+    }
+
+    func setPinned(chatId: String, pinned: Bool) {
+        if demo != nil {
+            if pinned {
+                guard !demoPinnedSessionIds.contains(chatId),
+                      demoPinnedSessionIds.count < WorkspaceStore.maxSidebarPins else { return }
+                demoPinnedSessionIds.append(chatId)
+            } else {
+                demoPinnedSessionIds.removeAll { $0 == chatId }
+            }
+            return
+        }
+        workspace?.setPinned(chatId: chatId, pinned: pinned)
+    }
 
     private func setArchived(chatId: String, archived: Bool) {
         if let demo {

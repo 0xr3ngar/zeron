@@ -80,7 +80,10 @@ async fn start(dir: &Path, cloud: &str, count: Arc<AtomicUsize>) -> EngineRuntim
     let config = engine_config(dir, cloud);
     let auth = Engine::build_auth(&config).await;
     assert!(auth.is_private());
-    assert!(auth.access_token().await.is_none());
+    assert_eq!(
+        auth.access_token().await,
+        Err(zeron_rpc::TokenError::SignedOut)
+    );
     assert!(!auth.workos_enabled());
     assert_eq!(
         Engine::initial_workspace_scope(&auth),
@@ -382,7 +385,10 @@ async fn malformed_private_config_never_falls_back_to_cloud_or_local() {
         WorkspaceScope::Private
     );
     assert!(Engine::resolve_profile(&config, &auth, WorkspaceScope::Private).is_err());
-    assert!(auth.access_token().await.is_none());
+    assert_eq!(
+        auth.access_token().await,
+        Err(zeron_rpc::TokenError::SignedOut)
+    );
 }
 
 #[tokio::test]

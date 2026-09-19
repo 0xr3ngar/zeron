@@ -111,6 +111,7 @@ fn workspace_devices(
                     last_seen_at: None,
                     created_at: Some(node.paired_at),
                     version: None,
+                    cursor_sdk_version: None,
                     capabilities: Vec::new(),
                 });
                 device.role = Some(node.role.wire().into());
@@ -411,6 +412,17 @@ impl Render for DevicesSection {
                             .into_any_element(),
                     );
                 }
+                meta.push(
+                    div()
+                        .child(SharedString::from(format!(
+                            "Cursor SDK {}",
+                            device
+                                .cursor_sdk_version
+                                .as_deref()
+                                .unwrap_or("unknown (older engine)")
+                        )))
+                        .into_any_element(),
+                );
                 if !online && device.last_seen_at.is_some() {
                     meta.push(
                         div()
@@ -580,6 +592,7 @@ mod tests {
             last_seen_at: Some(DateTime::from_timestamp(1_700_000_000, 0).unwrap()),
             created_at: None,
             version: Some("0.2.71".into()),
+            cursor_sdk_version: Some("1.0.31".into()),
             capabilities: Vec::new(),
         }
     }
@@ -610,11 +623,13 @@ mod tests {
         );
         assert_eq!(rows[0].device.name, "Renamed workstation");
         assert_eq!(rows[0].device.version.as_deref(), Some("0.2.71"));
+        assert_eq!(rows[0].device.cursor_sdk_version.as_deref(), Some("1.0.31"));
         assert_eq!(rows[0].device.platform, "linux");
         assert!(rows[0].registered && rows[0].paired);
         assert_eq!(rows[1].device.name, "Mobile");
         assert_eq!(rows[1].device.role.as_deref(), Some("client"));
         assert_eq!(rows[1].device.last_seen_at, None);
+        assert_eq!(rows[1].device.cursor_sdk_version, None);
         assert!(!rows[1].registered && rows[1].paired);
     }
 

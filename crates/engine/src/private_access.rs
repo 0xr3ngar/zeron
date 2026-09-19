@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{OwnedMutexGuard, watch};
 use zeron_private::{Hub, NodeRole, PrivateConfig};
-use zeron_rpc::{RpcError, RpcReply, TokenSource, methods};
+use zeron_rpc::{RpcError, RpcReply, TokenError, TokenSource, methods};
 
 pub struct PrivateAccess {
     data_dir: PathBuf,
@@ -382,8 +382,11 @@ impl PrivateAccess {
 
 #[async_trait]
 impl TokenSource for PrivateAccess {
-    async fn token(&self) -> Option<String> {
-        self.config().filter(|c| c.enabled).map(|c| c.token)
+    async fn token(&self) -> Result<String, TokenError> {
+        self.config()
+            .filter(|c| c.enabled)
+            .map(|c| c.token)
+            .ok_or(TokenError::SignedOut)
     }
     fn header_auth(&self) -> bool {
         true
@@ -631,7 +634,7 @@ mod tests {
                 .unwrap()
                 .enabled
         );
-        assert!(access.token().await.is_none());
+        assert_eq!(access.token().await, Err(TokenError::SignedOut));
         operation.abort();
         assert!(matches!(operation.await, Err(error) if error.is_cancelled()));
         network.disable_gate.add_permits(1);
@@ -667,7 +670,7 @@ mod tests {
                 .unwrap()
                 .enabled
         );
-        assert!(access.token().await.is_none());
+        assert_eq!(access.token().await, Err(TokenError::SignedOut));
         assert!(!network.configured.load(Ordering::SeqCst));
         assert!(
             access
@@ -700,7 +703,7 @@ mod tests {
                 .unwrap()
                 .enabled
         );
-        assert!(access.token().await.is_none());
+        assert_eq!(access.token().await, Err(TokenError::SignedOut));
         assert!(
             access
                 .admin()
