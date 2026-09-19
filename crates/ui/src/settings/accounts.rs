@@ -199,6 +199,17 @@ pub struct AccountsPage {
 }
 
 impl AccountsPage {
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture(
+        state: Entity<AppState>,
+        snapshot: AgentAccountsSnapshot,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut page = Self::new(state, cx);
+        page.snapshot = Loadable::Ready(snapshot);
+        page
+    }
+
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let target_device = (state.read(cx).workspace_scope
             == Some(zeron_proto::WorkspaceScope::Private))
@@ -901,7 +912,7 @@ impl AccountsPage {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(widgets::row_title(theme, email))
+                    .child(widgets::row_title(theme, "").child(crate::privacy::identity(email, cx)))
                     .map(|el| {
                         // Meters XOR the quiet fallback line — never both
                         // (zeron: `usage ? meters : "Usage unavailable"…`).
