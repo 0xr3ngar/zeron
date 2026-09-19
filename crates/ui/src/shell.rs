@@ -1207,7 +1207,6 @@ fn resolve_shell_escape(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AccountMenuAction {
     EnableSync,
-    PrivateWorkspace,
     SyncInProgress,
     /// Postponed switch wizard (or legacy restart fallback) — reopen it.
     RestartPending,
@@ -1350,7 +1349,7 @@ fn account_menu_action(scope: Option<WorkspaceScope>, flow: SyncFlow) -> Option<
         Some(WorkspaceScope::Private) => match flow {
             SyncFlow::ImportFailed { .. } => Some(AccountMenuAction::RestartPending),
             _ if flow.is_switch_lifecycle() => Some(AccountMenuAction::SyncInProgress),
-            _ => Some(AccountMenuAction::PrivateWorkspace),
+            _ => None,
         },
         Some(WorkspaceScope::Development) | None => None,
     }
@@ -7454,7 +7453,8 @@ impl Shell {
     ) -> AnyElement {
         let theme = &theme.for_popup();
         let open = self.user_menu.is_open();
-        let action = account_menu_action(self.state.read(cx).workspace_scope, self.sync_flow);
+        let scope = self.state.read(cx).workspace_scope;
+        let action = account_menu_action(scope, self.sync_flow);
         // Bottom-of-sidebar identity: avatar circle + scope/account label and
         // its secondary status line.
         let initial: SharedString = user_line
@@ -7557,16 +7557,18 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
-                .child(
-                    div()
-                        .px(px(8.0))
-                        .pt(px(6.0))
-                        .pb(px(4.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
-                        .truncate()
-                        .child(menu_identity),
-                )
+                .when(scope != Some(WorkspaceScope::Private), |menu| {
+                    menu.child(
+                        div()
+                            .px(px(8.0))
+                            .pt(px(6.0))
+                            .pb(px(4.0))
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.text_muted)
+                            .truncate()
+                            .child(menu_identity),
+                    )
+                })
                 .when_some(action, |menu, action| {
                     let row = match action {
                         AccountMenuAction::EnableSync => {
@@ -7581,20 +7583,6 @@ impl Shell {
                                         .text_color(theme.text_muted),
                                 )
                                 .child(SharedString::from("Set up sync"))
-                                .into_any_element()
-                        }
-                        AccountMenuAction::PrivateWorkspace => {
-                            popover::menu_row(theme, false, "user-menu-private-workspace")
-                                .id("user-menu-private-workspace")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.open_settings(SettingsSection::Workspace, cx)
-                                }))
-                                .child(
-                                    icon(icons::GLOBAL)
-                                        .size(px(16.0))
-                                        .text_color(theme.text_muted),
-                                )
-                                .child("Private workspace settings")
                                 .into_any_element()
                         }
                         AccountMenuAction::SyncInProgress => {
@@ -11663,7 +11651,7 @@ mod tests {
     fn private_workspace_does_not_offer_cloud_sign_in_or_sign_out() {
         assert_eq!(
             account_menu_action(Some(WorkspaceScope::Private), SyncFlow::Idle),
-            Some(AccountMenuAction::PrivateWorkspace)
+            None
         );
         assert_eq!(
             sync_flow_after_auth(
