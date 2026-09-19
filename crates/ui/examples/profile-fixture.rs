@@ -55,7 +55,7 @@ fn main() -> anyhow::Result<()> {
         settings::init(settings.clone(), data.path(), cx);
         let fonts = typography::register_fonts(cx);
         typography::init(settings.ui_font_family.clone(), settings.ui_font_size, settings.terminal_font_family.clone(), settings.terminal_font_size, settings.code_font_family.clone(), settings.code_font_size, fonts, cx);
-            theme_library::init(data.path(), cx);
+        theme_library::init(data.path(), cx);
         appearance::init(appearance::AppearanceMode::Dark, settings.theme_selection, settings.accent, settings.surface, cx);
         history::init(settings.git_history_columns, settings.git_history_column_widths, settings.git_history_column_order, settings.git_history_author_display, cx);
         composer::init(cx, settings.composer_send_behavior);
@@ -96,7 +96,9 @@ fn main() -> anyhow::Result<()> {
             cx.background_executor().timer(Duration::from_secs(5)).await;
             for (name, page, width, font, hidden) in [
                 ("profile-dark", 0, 768.0, 16, false),
+                ("profile-blurred-14", 0, 768.0, 14, true),
                 ("profile-zoom-blurred", 0, 500.0, 20, true),
+                ("profile-blurred-light", 0, 768.0, 16, true),
                 ("accounts-visible", 1, 768.0, 16, false),
                 ("accounts-blurred", 1, 768.0, 16, true),
                 ("accounts-zoom-blurred", 1, 650.0, 20, true),
@@ -105,6 +107,7 @@ fn main() -> anyhow::Result<()> {
                 let destination = output.join(format!("{name}.png"));
                 let _ = std::fs::remove_file(&destination);
                 window.update(cx, |fixture, window, cx| {
+                    appearance::set_mode(if name.ends_with("-light") { appearance::AppearanceMode::Light } else { appearance::AppearanceMode::Dark }, cx);
                     fixture.page = page;
                     fixture.width = width;
                     typography::set_font_size(typography::UiFontSize::ALL.into_iter().find(|size| size.pixels() == font as f32).unwrap(), window, cx);
