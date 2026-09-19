@@ -71,6 +71,9 @@ actions!(
     shell,
     [
         SaveFile,
+        ZoomIn,
+        ZoomOut,
+        ResetZoom,
         ToggleSidebar,
         ToggleChanges,
         AddSpacePalette,
@@ -384,6 +387,28 @@ pub fn apply_keymap(
             None,
         ),
     ]);
+    cx.bind_keys([
+        KeyBinding::new(
+            &valid_or_default(&keymap.zoom_in, ShortcutId::ZoomIn.default_combo()),
+            ZoomIn,
+            None,
+        ),
+        KeyBinding::new(
+            &valid_or_default(&keymap.zoom_out, ShortcutId::ZoomOut.default_combo()),
+            ZoomOut,
+            None,
+        ),
+        KeyBinding::new(
+            &valid_or_default(&keymap.reset_zoom, ShortcutId::ResetZoom.default_combo()),
+            ResetZoom,
+            None,
+        ),
+    ]);
+    cx.bind_keys(
+        keymap
+            .zoom_in_aliases()
+            .map(|combo| KeyBinding::new(&platform_combo(combo), ZoomIn, None)),
+    );
     crate::browser::bind_keys(cx, keymap);
     // ⌘1..⌘9 open the sidebar's first nine rows. A slot left unbound (an empty
     // combo in a hand-edited file) binds nothing rather than falling back —
@@ -10985,6 +11010,27 @@ impl Render for Shell {
                     }
                 }
             }))
+            .on_action(cx.listener(|_, _: &ZoomIn, window, cx| {
+                crate::typography::set_font_size(
+                    crate::typography::font_size(cx).stepped(1),
+                    window,
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|_, _: &ZoomOut, window, cx| {
+                crate::typography::set_font_size(
+                    crate::typography::font_size(cx).stepped(-1),
+                    window,
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|_, _: &ResetZoom, window, cx| {
+                crate::typography::set_font_size(
+                    crate::typography::UiFontSize::default(),
+                    window,
+                    cx,
+                );
+            }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             // New session works from anywhere — `open_new_session` routes back
             // to chat itself, so Settings is not a dead spot.
@@ -13812,5 +13858,98 @@ impl Shell {
     pub fn fixture_appshots_transcript_start(&self, cx: &mut Context<Self>) {
         self.transcript
             .update(cx, |t, cx| t.fixture_appshots_start(cx));
+    }
+}
+
+#[cfg(test)]
+mod zoom_tests {
+    use super::*;
+    use crate::typography::{self, FontAvailability, UiFontSize};
+    use gpui::{AppContext, TestAppContext};
+
+    #[gpui::test]
+    fn zoom_shortcuts_resize_persist_reset_and_rebind(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            settings::init(UiSettings::default(), dir.path(), cx);
+            typography::init(
+                Default::default(),
+                UiFontSize::default(),
+                Default::default(),
+                typography::TERMINAL_FONT_SIZE_DEFAULT,
+                Default::default(),
+                typography::CODE_FONT_SIZE_DEFAULT,
+                FontAvailability::all(),
+                cx,
+            );
+        });
+        let host = cx.add_window(|window, cx| {
+            window.set_rem_size(px(UiFontSize::default().pixels()));
+            let state = cx.new(|_| AppState::new());
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        cx.update_window(host.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        for (combo, expected) in [
+            ("mod-=", 18.0),
+            ("mod--", 16.0),
+            ("mod-+", 18.0),
+            ("mod-shift-=", 20.0),
+            ("mod-+", 20.0),
+            ("mod-0", 16.0),
+        ] {
+            cx.simulate_keystrokes(host.into(), &platform_combo(combo));
+            host.update(cx, |_, window, cx| {
+                assert_eq!(typography::font_size(cx).pixels(), expected, "{combo}");
+                assert_eq!(window.rem_size(), px(expected));
+            })
+            .unwrap();
+            assert_eq!(UiSettings::load(dir.path()).ui_font_size.pixels(), expected);
+        }
+        host.update(cx, |shell, _, cx| {
+            shell.open_settings(SettingsSection::Shortcuts, cx);
+            let mut keymap = KeymapConfig::default();
+            keymap.set(ShortcutId::ZoomIn, "mod-alt-z".into());
+            apply_keymap(cx, &keymap, ComposerSendBehavior::default());
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(host.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        for combo in ["mod-=", "mod-+", "mod-shift-="] {
+            cx.simulate_keystrokes(host.into(), &platform_combo(combo));
+        }
+        host.update(cx, |_, _, cx| {
+            assert_eq!(typography::font_size(cx).pixels(), 16.0)
+        })
+        .unwrap();
+        cx.simulate_keystrokes(host.into(), &platform_combo("mod-alt-z"));
+        host.update(cx, |_, _, cx| {
+            assert_eq!(typography::font_size(cx).pixels(), 18.0)
+        })
+        .unwrap();
+        for _ in 0..10 {
+            cx.simulate_keystrokes(host.into(), &platform_combo("mod--"));
+        }
+        host.update(cx, |_, window, cx| {
+            assert_eq!(window.rem_size(), px(12.0));
+            assert_eq!(typography::font_size(cx).pixels(), 12.0);
+        })
+        .unwrap();
     }
 }
